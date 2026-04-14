@@ -53,12 +53,14 @@ def analyze_stat(
     played = df[df["minutes"] != 0].copy()
     spread_merge = played.merge(stat_props[["name", "spread"]], how="left")
     spread_merge = spread_merge[~spread_merge["spread"].isna()]
-    hit_series = spread_merge.groupby("name").apply(
-        lambda g: (g[stat] > g["spread"]).mean() * 100,
-        include_groups=False,
+    hit_pct = (
+        spread_merge.assign(_hit=(spread_merge[stat] > spread_merge["spread"]).astype(float))
+        .groupby("name")["_hit"]
+        .mean()
+        .mul(100)
+        .round(1)
+        .reset_index(name="hit%")
     )
-    hit_pct = hit_series.reset_index(name="hit%")
-    hit_pct["hit%"] = hit_pct["hit%"].round(1)
 
     # --- Averages: full season, last 5, last 10 ---
     # Group by name only so traded players don't get split into multiple rows.
@@ -133,12 +135,14 @@ def analyze_stat(
             stat_props[["name", "spread"]], how="left"
         )
         hist_spread = hist_spread[~hist_spread["spread"].isna()]
-        hist_series = hist_spread.groupby("name").apply(
-            lambda g: (g[stat] > g["spread"]).mean() * 100,
-            include_groups=False,
+        hist_hit = (
+            hist_spread.assign(_hit=(hist_spread[stat] > hist_spread["spread"]).astype(float))
+            .groupby("name")["_hit"]
+            .mean()
+            .mul(100)
+            .round(1)
+            .reset_index(name="history_hit%")
         )
-        hist_hit = hist_series.reset_index(name="history_hit%")
-        hist_hit["history_hit%"] = hist_hit["history_hit%"].round(1)
         stat_props = stat_props.merge(hist_hit, how="left")
     else:
         stat_props["history_hit%"] = None
