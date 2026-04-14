@@ -180,7 +180,7 @@ def make_last_n_chart(last_games: list[dict], stat_key: str, stat_label: str, li
         color=(
             alt.Color(
                 "hit:N",
-                scale=alt.Scale(domain=[True, False], range=["#22c55e", "#3b82f6"]),
+                scale=alt.Scale(domain=[True, False], range=["#22c55e", "#ef4444"]),
                 legend=None,
             )
             if line is not None
