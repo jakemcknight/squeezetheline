@@ -1,0 +1,11 @@
+[theme]
+# Dark grey base with a green accent (fits the "green = good pick" language)
+base = "dark"
+primaryColor = "#22c55e"
+backgroundColor = "#0f1115"
+secondaryBackgroundColor = "#1a1d24"
+textColor = "#e6edf3"
+font = "sans serif"
+
+[server]
+headless = true

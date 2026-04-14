@@ -20,7 +20,87 @@ from analysis import (
     build_player_summaries,
 )
 
-st.set_page_config(page_title="Squeeze the Line", page_icon="\U0001f3c0", layout="wide")
+st.set_page_config(
+    page_title="Squeeze the Line",
+    page_icon="\U0001f3c0",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# --- Custom CSS for branding ---
+st.markdown(
+    """
+    <style>
+        /* Import a nicer font */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+        html, body, [class*="css"] {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        /* Header / title styling */
+        h1 {
+            font-weight: 800 !important;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        h2, h3 {
+            font-weight: 700 !important;
+            letter-spacing: -0.01em;
+        }
+
+        /* Card-like containers for metrics */
+        [data-testid="stMetric"] {
+            background: #1a1d24;
+            border: 1px solid #2a2f3a;
+            border-radius: 10px;
+            padding: 16px 18px;
+        }
+
+        /* DataFrame styling */
+        [data-testid="stDataFrame"] {
+            border: 1px solid #2a2f3a;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        /* Sidebar polish */
+        [data-testid="stSidebar"] {
+            background: #141720;
+            border-right: 1px solid #2a2f3a;
+        }
+
+        /* Buttons */
+        .stButton > button {
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.15s ease;
+        }
+        .stButton > button:hover {
+            transform: translateY(-1px);
+        }
+
+        /* Tabs */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 4px;
+        }
+        .stTabs [data-baseweb="tab"] {
+            padding: 10px 18px;
+            font-weight: 600;
+        }
+
+        /* Hide Streamlit branding */
+        #MainMenu { visibility: hidden; }
+        footer { visibility: hidden; }
+        [data-testid="stDecoration"] { display: none; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # --- Password gate ---
@@ -37,15 +117,32 @@ def check_password() -> bool:
     if st.session_state.get("authenticated"):
         return True
 
-    st.title("Squeeze the Line")
-    st.caption("Enter password to continue.")
-    pwd = st.text_input("Password", type="password", label_visibility="collapsed")
-    if pwd:
-        if pwd == expected:
-            st.session_state["authenticated"] = True
-            st.rerun()
-        else:
-            st.error("Wrong password.")
+    # Center the password gate
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        st.markdown(
+            """
+            <div style="text-align: center; padding-top: 80px;">
+                <h1 style="margin: 0; font-size: 3rem;">Squeeze the Line</h1>
+                <p style="color: #8b92a5; margin-top: 8px; margin-bottom: 32px;">
+                    NBA player props · data-driven picks
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        pwd = st.text_input(
+            "Password",
+            type="password",
+            label_visibility="collapsed",
+            placeholder="Password",
+        )
+        if pwd:
+            if pwd == expected:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Wrong password.")
     return False
 
 
@@ -346,12 +443,37 @@ def render_player_detail(name: str, summaries: dict, results: dict):
 
 
 # --- Header ---
-st.title("Squeeze the Line")
+header_col, date_col = st.columns([3, 1])
+with header_col:
+    st.markdown(
+        """
+        <div style="margin-bottom: -8px;">
+            <h1 style="margin: 0; font-size: 2.8rem;">Squeeze the Line</h1>
+            <p style="margin: 0; color: #8b92a5; font-size: 1rem; letter-spacing: 0.02em;">
+                NBA player props · data-driven picks
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 with st.sidebar:
     selected_date = st.date_input("Game Date", value=datetime.date.today())
 
-st.caption(selected_date.strftime("%A, %B %d, %Y"))
+with date_col:
+    st.markdown(
+        f"""
+        <div style="text-align: right; padding-top: 18px; color: #8b92a5;">
+            <div style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.1em;">Slate</div>
+            <div style="color: #e6edf3; font-size: 1.1rem; font-weight: 600;">
+                {selected_date.strftime("%a, %b %d")}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+st.write("")  # small spacer
 
 # --- Load cached data or prompt to fetch ---
 cached = load_daily_results(selected_date)
