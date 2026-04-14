@@ -390,17 +390,19 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             "AST": career_avg.get("assists", 0),
         },
     ])
-    st.dataframe(
-        avg_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "MIN": st.column_config.NumberColumn(format="%.1f"),
-            "PTS": st.column_config.NumberColumn(format="%.1f"),
-            "REB": st.column_config.NumberColumn(format="%.1f"),
-            "AST": st.column_config.NumberColumn(format="%.1f"),
-        },
-    )
+    _, avg_mid, _ = st.columns([1, 6, 1])
+    with avg_mid:
+        st.dataframe(
+            avg_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "MIN": st.column_config.NumberColumn(format="%.1f"),
+                "PTS": st.column_config.NumberColumn(format="%.1f"),
+                "REB": st.column_config.NumberColumn(format="%.1f"),
+                "AST": st.column_config.NumberColumn(format="%.1f"),
+            },
+        )
 
     # --- Last 20 games ---
     st.subheader("Last 20 Games")
@@ -430,7 +432,9 @@ def render_player_detail(name: str, summaries: dict, results: dict):
         styled = games_df.style.apply(highlight_hits, axis=1).format({
             "MIN": "{:.0f}", "PTS": "{:.0f}", "REB": "{:.0f}", "AST": "{:.0f}",
         })
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        _, games_mid, _ = st.columns([1, 6, 1])
+        with games_mid:
+            st.dataframe(styled, use_container_width=True, hide_index=True)
 
         # Hit rate over last 20 vs current line
         st.subheader("Hit Rate vs Today's Lines (Last 20)")
