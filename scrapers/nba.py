@@ -51,6 +51,10 @@ def get_current_season_stats() -> pd.DataFrame:
     df["points"] = pd.to_numeric(raw["PTS"], errors="coerce").fillna(0)
     df["rebounds"] = pd.to_numeric(raw["REB"], errors="coerce").fillna(0)
     df["assists"] = pd.to_numeric(raw["AST"], errors="coerce").fillna(0)
+    df["threes"] = pd.to_numeric(raw["FG3M"], errors="coerce").fillna(0)
+    df["steals"] = pd.to_numeric(raw["STL"], errors="coerce").fillna(0)
+    df["blocks"] = pd.to_numeric(raw["BLK"], errors="coerce").fillna(0)
+    df["pra"] = df["points"] + df["rebounds"] + df["assists"]
     return df
 
 

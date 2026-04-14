@@ -99,7 +99,15 @@ def analyze_stat(
         history = history.rename(columns={
             "player": "name", "team_code": "team", "opponent_code": "opponent",
             "pts": "points", "reb": "rebounds", "ast": "assists", "min": "minutes",
+            "threefm": "threes", "stl": "steals", "blk": "blocks",
         })
+        # Derive PRA if not already present
+        for col in ("points", "rebounds", "assists"):
+            history[col] = pd.to_numeric(history[col], errors="coerce").fillna(0)
+        history["pra"] = history["points"] + history["rebounds"] + history["assists"]
+        for col in ("threes", "steals", "blocks"):
+            if col in history.columns:
+                history[col] = pd.to_numeric(history[col], errors="coerce").fillna(0)
         hist_spread = history[history["minutes"] != 0].merge(
             stat_props[["name", "spread"]], how="left"
         )
@@ -187,36 +195,56 @@ def build_player_summaries(
         history_renamed = history.rename(columns={
             "player": "name", "team_code": "team", "opponent_code": "opponent",
             "pts": "points", "reb": "rebounds", "ast": "assists", "min": "minutes",
+            "threefm": "threes", "stl": "steals", "blk": "blocks",
         })
         # Coerce types
         for col in ["points", "rebounds", "assists", "minutes"]:
             history_renamed[col] = pd.to_numeric(history_renamed[col], errors="coerce").fillna(0)
+        for col in ("threes", "steals", "blocks"):
+            if col in history_renamed.columns:
+                history_renamed[col] = pd.to_numeric(history_renamed[col], errors="coerce").fillna(0)
+        history_renamed["pra"] = history_renamed["points"] + history_renamed["rebounds"] + history_renamed["assists"]
         history_renamed["gameday"] = pd.to_datetime(history_renamed["game_gameday"], errors="coerce")
+
+    # Map prop type names to the stat column keys used elsewhere
+    prop_to_stat = {
+        "Total Points": "points",
+        "Total Rebounds": "rebounds",
+        "Total Assists": "assists",
+        "Total PRA": "pra",
+        "Total 3PM": "threes",
+        "Total Steals": "steals",
+        "Total Blocks": "blocks",
+    }
 
     summaries = {}
     for name in player_names:
-        # Today's lines
+        # Today's lines (keyed by stat name)
         player_props = props[props["name"] == name]
         today_lines = {}
         for _, row in player_props.iterrows():
-            t = row["type"]
-            if t == "Total Points":
-                today_lines["points"] = row["spread"]
-            elif t == "Total Rebounds":
-                today_lines["rebounds"] = row["spread"]
-            elif t == "Total Assists":
-                today_lines["assists"] = row["spread"]
+            stat_key = prop_to_stat.get(row["type"])
+            if stat_key:
+                today_lines[stat_key] = row["spread"]
 
         # Season averages from current_stats (filter to games with minutes)
         season_games = current_stats[
             (current_stats["name"] == name) & (current_stats["minutes"] != 0)
         ]
+
+        def _avg(df: pd.DataFrame, col: str) -> float:
+            return float(df[col].mean()) if col in df.columns and len(df) else 0.0
+
         season_avg = {
             "games": int(len(season_games)),
-            "points": float(season_games["points"].mean()) if len(season_games) else 0.0,
-            "rebounds": float(season_games["rebounds"].mean()) if len(season_games) else 0.0,
-            "assists": float(season_games["assists"].mean()) if len(season_games) else 0.0,
-            "minutes": float(season_games["minutes"].mean()) if len(season_games) else 0.0,
+            "minutes": _avg(season_games, "minutes"),
+            "points": _avg(season_games, "points"),
+            "rebounds": _avg(season_games, "rebounds"),
+            "assists": _avg(season_games, "assists"),
+            "pra": _avg(season_games, "pra"),
+            "threes": _avg(season_games, "threes"),
+            "steals": _avg(season_games, "steals"),
+            "blocks": _avg(season_games, "blocks"),
         }
 
         # Use the most recent game for current team / position (handles traded players)
@@ -229,8 +257,13 @@ def build_player_summaries(
             position = ""
 
         # Career averages from history (filter to games with minutes)
-        career_avg = {"games": 0, "points": 0.0, "rebounds": 0.0, "assists": 0.0, "minutes": 0.0}
+        career_avg = {
+            "games": 0, "minutes": 0.0,
+            "points": 0.0, "rebounds": 0.0, "assists": 0.0,
+            "pra": 0.0, "threes": 0.0, "steals": 0.0, "blocks": 0.0,
+        }
         last_20 = []
+        vs_opponent = []
         if not history_renamed.empty:
             career_games = history_renamed[
                 (history_renamed["name"] == name) & (history_renamed["minutes"] != 0)
@@ -238,10 +271,14 @@ def build_player_summaries(
             if len(career_games):
                 career_avg = {
                     "games": int(len(career_games)),
-                    "points": float(career_games["points"].mean()),
-                    "rebounds": float(career_games["rebounds"].mean()),
-                    "assists": float(career_games["assists"].mean()),
-                    "minutes": float(career_games["minutes"].mean()),
+                    "minutes": _avg(career_games, "minutes"),
+                    "points": _avg(career_games, "points"),
+                    "rebounds": _avg(career_games, "rebounds"),
+                    "assists": _avg(career_games, "assists"),
+                    "pra": _avg(career_games, "pra"),
+                    "threes": _avg(career_games, "threes"),
+                    "steals": _avg(career_games, "steals"),
+                    "blocks": _avg(career_games, "blocks"),
                 }
                 # Last 20 games (sorted most recent first)
                 last_20_df = career_games.sort_values("gameday", ascending=False).head(20)
@@ -253,6 +290,10 @@ def build_player_summaries(
                         "pts": float(g["points"]),
                         "reb": float(g["rebounds"]),
                         "ast": float(g["assists"]),
+                        "pra": float(g.get("pra", 0)),
+                        "threes": float(g.get("threes", 0)),
+                        "steals": float(g.get("steals", 0)),
+                        "blocks": float(g.get("blocks", 0)),
                     })
 
         summaries[name] = {

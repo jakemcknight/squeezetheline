@@ -225,6 +225,10 @@ STAT_CONFIGS = [
     ("points", "Total Points"),
     ("rebounds", "Total Rebounds"),
     ("assists", "Total Assists"),
+    ("pra", "Total PRA"),
+    ("threes", "Total 3PM"),
+    ("steals", "Total Steals"),
+    ("blocks", "Total Blocks"),
 ]
 
 DISPLAY_COLS = [
@@ -408,35 +412,45 @@ def render_player_detail(name: str, summaries: dict, results: dict):
     season_avg = summary.get("season_avg", {})
     career_avg = summary.get("career_avg", {})
 
-    cols = st.columns(3)
-    for i, stat in enumerate(["points", "rebounds", "assists"]):
-        with cols[i]:
-            line = lines.get(stat)
-            s_avg = season_avg.get(stat, 0)
-            c_avg = career_avg.get(stat, 0)
+    # Only show stats the player has a line for (so the layout stays clean
+    # when a player doesn't have an obscure prop like blocks or 3PM).
+    STAT_DISPLAY = [
+        ("points", "Points", "pts"),
+        ("rebounds", "Rebounds", "reb"),
+        ("assists", "Assists", "ast"),
+        ("pra", "PRA", "pra"),
+        ("threes", "3PM", "threes"),
+        ("steals", "Steals", "steals"),
+        ("blocks", "Blocks", "blocks"),
+    ]
+    active_stats = [s for s in STAT_DISPLAY if lines.get(s[0]) is not None]
+    if not active_stats:
+        active_stats = STAT_DISPLAY[:3]  # default to PTS/REB/AST if no lines
+
+    n_cols = min(len(active_stats), 4)
+    cols = st.columns(n_cols)
+    for i, (stat_key, label, _) in enumerate(active_stats):
+        with cols[i % n_cols]:
+            line = lines.get(stat_key)
+            s_avg = season_avg.get(stat_key, 0)
+            c_avg = career_avg.get(stat_key, 0)
             if line is None:
-                st.metric(stat.capitalize(), "—", help="No line for this prop")
+                st.metric(label, "—", help="No line for this prop")
             else:
                 delta = s_avg - line
-                st.metric(
-                    stat.capitalize(),
-                    f"Line: {line}",
-                    delta=f"{delta:+.1f} vs season avg",
-                )
+                st.metric(label, f"Line: {line}", delta=f"{delta:+.1f} vs season avg")
                 st.caption(f"Season: {s_avg:.1f}  |  Career: {c_avg:.1f}")
 
     # --- Last 10 games charts ---
     last_20 = summary.get("last_20", [])
     if last_20:
         st.subheader("Last 10 Games")
-        chart_cols = st.columns(3)
-        for i, (stat_key, stat_label, full_stat) in enumerate([
-            ("pts", "Points", "points"),
-            ("reb", "Rebounds", "rebounds"),
-            ("ast", "Assists", "assists"),
-        ]):
-            with chart_cols[i]:
-                chart = make_last_n_chart(last_20, stat_key, stat_label, lines.get(full_stat), n=10)
+        chart_stats = [s for s in active_stats if s[2] in last_20[0]]
+        n_chart_cols = min(len(chart_stats), 3)
+        chart_cols = st.columns(n_chart_cols) if n_chart_cols > 0 else []
+        for i, (full_stat, label, game_key) in enumerate(chart_stats):
+            with chart_cols[i % n_chart_cols]:
+                chart = make_last_n_chart(last_20, game_key, label, lines.get(full_stat), n=10)
                 if chart is not None:
                     st.altair_chart(chart, use_container_width=True)
 
@@ -449,6 +463,10 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             "PTS": season_avg.get("points", 0),
             "REB": season_avg.get("rebounds", 0),
             "AST": season_avg.get("assists", 0),
+            "PRA": season_avg.get("pra", 0),
+            "3PM": season_avg.get("threes", 0),
+            "STL": season_avg.get("steals", 0),
+            "BLK": season_avg.get("blocks", 0),
         },
         {
             "Window": f"Career ({career_avg.get('games', 0)} games)",
@@ -456,6 +474,10 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             "PTS": career_avg.get("points", 0),
             "REB": career_avg.get("rebounds", 0),
             "AST": career_avg.get("assists", 0),
+            "PRA": career_avg.get("pra", 0),
+            "3PM": career_avg.get("threes", 0),
+            "STL": career_avg.get("steals", 0),
+            "BLK": career_avg.get("blocks", 0),
         },
     ])
     _, avg_mid, _ = st.columns([1, 6, 1])
@@ -469,6 +491,10 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                 "PTS": st.column_config.NumberColumn(format="%.1f"),
                 "REB": st.column_config.NumberColumn(format="%.1f"),
                 "AST": st.column_config.NumberColumn(format="%.1f"),
+                "PRA": st.column_config.NumberColumn(format="%.1f"),
+                "3PM": st.column_config.NumberColumn(format="%.1f"),
+                "STL": st.column_config.NumberColumn(format="%.1f"),
+                "BLK": st.column_config.NumberColumn(format="%.1f"),
             },
         )
 
@@ -637,11 +663,20 @@ with st.expander("Today's Games", expanded=False):
 st.divider()
 
 # --- Stat selector ---
+STAT_LABELS = {
+    "Points": "points",
+    "Rebounds": "rebounds",
+    "Assists": "assists",
+    "PRA": "pra",
+    "3PM": "threes",
+    "Steals": "steals",
+    "Blocks": "blocks",
+}
 stat_tab = st.radio(
-    "Stat", ["Points", "Rebounds", "Assists"],
+    "Stat", list(STAT_LABELS.keys()),
     horizontal=True, label_visibility="collapsed",
 )
-stat = stat_tab.lower()
+stat = STAT_LABELS[stat_tab]
 result = results[stat]
 
 # --- Sidebar filters ---

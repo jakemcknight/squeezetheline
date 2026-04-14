@@ -21,6 +21,10 @@ MARKET_MAP = {
     "player_points": "Total Points",
     "player_rebounds": "Total Rebounds",
     "player_assists": "Total Assists",
+    "player_points_rebounds_assists": "Total PRA",
+    "player_threes": "Total 3PM",
+    "player_steals": "Total Steals",
+    "player_blocks": "Total Blocks",
 }
 
 # All markets we want, comma-separated for a single API call per event
