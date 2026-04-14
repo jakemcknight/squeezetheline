@@ -10,6 +10,7 @@ import altair as alt
 from scrapers.odds_api import get_todays_games, get_all_props, get_events_for_date
 from scrapers.nba import get_current_season_stats, get_player_positions
 from scrapers.basketball_ref import get_defense_by_position
+from scrapers.injuries import get_injury_report
 from data import prepare_stats, prepare_props, DATA_DIR
 from analysis import (
     analyze_stat,
@@ -232,7 +233,7 @@ STAT_CONFIGS = [
 ]
 
 DISPLAY_COLS = [
-    "name", "player_url", "team-code", "opponent", "position", "spread",
+    "name", "status_short", "player_url", "team-code", "opponent", "position", "spread",
     "delta", "delta_5g", "delta_10g",
     "hit%", "history_hit%",
     "rank", "rest_days", "b2b", "std_dev", "spm",
@@ -284,21 +285,44 @@ def fetch_fresh_data(date: datetime.date):
 
     player_urls = positions[["name", "player_url"]].drop_duplicates(subset="name")
 
+    # Injury report from ESPN
+    injuries = get_injury_report()
+    injury_join = (
+        injuries[["name", "status_short", "comment"]].drop_duplicates(subset="name")
+        if not injuries.empty
+        else pd.DataFrame(columns=["name", "status_short", "comment"])
+    )
+
     results = {}
     for stat, prop_type in STAT_CONFIGS:
         result = analyze_stat(stat, prop_type, df, props, todays_games, defense, game_date=date)
         result = result.merge(player_urls, on="name", how="left")
+        if not injury_join.empty:
+            result = result.merge(injury_join, on="name", how="left")
         results[stat] = result
 
     # Build per-player summaries for the detail view
     all_players = sorted(set(props["name"].dropna().unique()))
     summaries = build_player_summaries(all_players, df, props, todays_games=todays_games)
 
+    # Attach injury info (if any) onto each summary
+    if not injuries.empty:
+        inj_lookup = injuries.drop_duplicates("name").set_index("name").to_dict("index")
+        for name, summary in summaries.items():
+            if name in inj_lookup:
+                row = inj_lookup[name]
+                summary["injury"] = {
+                    "status": row.get("status", ""),
+                    "status_short": row.get("status_short", ""),
+                    "comment": row.get("comment", ""),
+                }
+
     return events, results, summaries
 
 
 COLUMN_CONFIG = {
     "name": st.column_config.TextColumn("Player"),
+    "status_short": st.column_config.TextColumn("Inj", help="Injury status (OUT/DBT/Q/DTD/PROB)"),
     "player_url": st.column_config.LinkColumn("Profile", display_text="NBA.com"),
     "team-code": st.column_config.TextColumn("Team"),
     "opponent": st.column_config.TextColumn("Opp"),
@@ -407,6 +431,31 @@ def render_player_detail(name: str, summaries: dict, results: dict):
     pos = summary.get("position", "")
     st.title(name)
     st.caption(f"{team}  |  {pos}")
+
+    injury = summary.get("injury")
+    if injury:
+        status = injury.get("status", "")
+        comment = injury.get("comment", "")
+        # Color the banner by severity
+        color = {
+            "Out": "#ef4444", "Doubtful": "#f97316", "Questionable": "#f59e0b",
+            "Day-To-Day": "#eab308", "Probable": "#84cc16",
+        }.get(status, "#8b92a5")
+        st.markdown(
+            f"""
+            <div style="background-color: {color}22; border-left: 4px solid {color};
+                        padding: 10px 14px; border-radius: 6px; margin-bottom: 14px;">
+                <div style="color: {color}; font-weight: 700; font-size: 0.9rem;
+                            text-transform: uppercase; letter-spacing: 0.05em;">
+                    {status}
+                </div>
+                <div style="color: #e6edf3; font-size: 0.95rem; margin-top: 2px;">
+                    {comment}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     # --- Today's lines vs averages ---
     st.subheader("Today's Lines")
