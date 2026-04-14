@@ -228,34 +228,39 @@ def fetch_fresh_data(date: datetime.date):
 
 
 COLUMN_CONFIG = {
-    "name": st.column_config.TextColumn("Player", width="medium"),
-    "player_url": st.column_config.LinkColumn("Profile", display_text="NBA.com", width="small"),
-    "team-code": st.column_config.TextColumn("Team", width="small"),
-    "opponent": st.column_config.TextColumn("Opp", width="small"),
-    "position": st.column_config.TextColumn("Pos", width="small"),
-    "spread": st.column_config.NumberColumn("Line", format="%.1f", width="small"),
-    "delta": st.column_config.NumberColumn("Delta", format="%+.1f", width="small"),
-    "delta_5g": st.column_config.NumberColumn("Delta 5G", format="%+.1f", width="small"),
-    "delta_10g": st.column_config.NumberColumn("Delta 10G", format="%+.1f", width="small"),
-    "hit%": st.column_config.ProgressColumn("Hit %", min_value=0, max_value=100, format="%.0f%%", width="small"),
-    "history_hit%": st.column_config.ProgressColumn("Hist Hit %", min_value=0, max_value=100, format="%.0f%%", width="small"),
-    "rank": st.column_config.NumberColumn("Def Rank", format="%.0f", width="small"),
-    "std_dev": st.column_config.NumberColumn("Std Dev", format="%.1f", width="small"),
-    "spm": st.column_config.NumberColumn("SPM", format="%.2f", width="small"),
+    "name": st.column_config.TextColumn("Player"),
+    "player_url": st.column_config.LinkColumn("Profile", display_text="NBA.com"),
+    "team-code": st.column_config.TextColumn("Team"),
+    "opponent": st.column_config.TextColumn("Opp"),
+    "position": st.column_config.TextColumn("Pos"),
+    "spread": st.column_config.NumberColumn("Line", format="%.1f"),
+    "delta": st.column_config.NumberColumn("Delta", format="%+.1f"),
+    "delta_5g": st.column_config.NumberColumn("Delta 5G", format="%+.1f"),
+    "delta_10g": st.column_config.NumberColumn("Delta 10G", format="%+.1f"),
+    "hit%": st.column_config.ProgressColumn("Hit %", min_value=0, max_value=100, format="%.0f%%", width="medium"),
+    "history_hit%": st.column_config.ProgressColumn("Hist Hit %", min_value=0, max_value=100, format="%.0f%%", width="medium"),
+    "rank": st.column_config.NumberColumn("Def Rank", format="%.0f"),
+    "std_dev": st.column_config.NumberColumn("Std Dev", format="%.1f"),
+    "spm": st.column_config.NumberColumn("SPM", format="%.2f"),
 }
 
 
 def show_table(df: pd.DataFrame, key: str):
-    """Display a results table with row selection — selecting a row opens the player detail."""
-    event = st.dataframe(
-        df,
-        column_config=COLUMN_CONFIG,
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key=key,
-    )
+    """Display a results table with row selection — selecting a row opens the player detail.
+
+    The table auto-sizes each column to its content and is centered on the page.
+    """
+    left, mid, right = st.columns([1, 12, 1])
+    with mid:
+        event = st.dataframe(
+            df,
+            column_config=COLUMN_CONFIG,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key=key,
+        )
     if event.selection.rows:
         idx = event.selection.rows[0]
         st.session_state["selected_player"] = df.iloc[idx]["name"]
