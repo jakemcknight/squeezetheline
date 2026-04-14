@@ -870,6 +870,12 @@ with view_col:
     st.session_state["compact_view"] = compact
 
 stat = STAT_LABELS[stat_tab]
+if stat not in results:
+    st.warning(
+        f"No **{stat_tab}** data in the current cache. Click **Fetch / Refresh Data** "
+        "in the sidebar to pull fresh data with all prop types."
+    )
+    st.stop()
 result = results[stat]
 
 
