@@ -8,6 +8,7 @@ from config import DATA_DIR
 # --- File paths ---
 
 HISTORICAL_DATA_PATH = os.path.join(DATA_DIR, "historical_data.csv")
+HISTORICAL_DATA_GZ_PATH = os.path.join(DATA_DIR, "historical_data.csv.gz")
 HISTORICAL_PROPS_PATH = os.path.join(DATA_DIR, "historical_props.csv")
 STATS_PATH = os.path.join(DATA_DIR, "stats.csv")
 SKIP_DATES_PATH = os.path.join(DATA_DIR, "skip_dates.csv")
@@ -56,13 +57,21 @@ def normalize_names(df: pd.DataFrame, column: str = "name") -> pd.DataFrame:
 # --- CSV loading / saving ---
 
 def load_historical_data() -> pd.DataFrame:
-    """Load the historical player performance data."""
+    """Load the historical player performance data.
+
+    Prefers the uncompressed .csv (written by backfill), falls back to the
+    .csv.gz snapshot that's committed to the repo for fresh deploys.
+    """
     if os.path.exists(HISTORICAL_DATA_PATH):
         return pd.read_csv(HISTORICAL_DATA_PATH, low_memory=False)
+    if os.path.exists(HISTORICAL_DATA_GZ_PATH):
+        return pd.read_csv(HISTORICAL_DATA_GZ_PATH, low_memory=False, compression="gzip")
     return pd.DataFrame()
 
 
 def save_historical_data(df: pd.DataFrame):
+    """Save historical data locally (uncompressed). The .csv.gz in the repo
+    is the deploy snapshot — refresh it manually when needed."""
     df.to_csv(HISTORICAL_DATA_PATH, index=False)
 
 

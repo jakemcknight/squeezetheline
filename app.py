@@ -501,9 +501,9 @@ with st.sidebar:
             st.session_state.pop("selected_player", None)
         st.rerun()
 
-    # Show a backfill prompt only when historical data is missing
-    from data import HISTORICAL_DATA_PATH
-    if not os.path.exists(HISTORICAL_DATA_PATH):
+    # Show a backfill prompt only when no historical data (compressed or raw) exists
+    from data import HISTORICAL_DATA_PATH, HISTORICAL_DATA_GZ_PATH
+    if not os.path.exists(HISTORICAL_DATA_PATH) and not os.path.exists(HISTORICAL_DATA_GZ_PATH):
         st.divider()
         st.warning("Historical data is missing. Career averages and historical hit% will be unavailable until backfilled.")
         if st.button("Run Historical Backfill", use_container_width=True):
