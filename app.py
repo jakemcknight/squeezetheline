@@ -99,6 +99,72 @@ st.markdown(
         #MainMenu { visibility: hidden; }
         footer { visibility: hidden; }
         [data-testid="stDecoration"] { display: none; }
+
+        /* ==========================
+           Mobile (< 768px) overrides
+           ========================== */
+        @media (max-width: 768px) {
+            /* Reduce main container padding to maximize screen usage */
+            .main .block-container {
+                padding: 1rem 0.75rem !important;
+                max-width: 100% !important;
+            }
+
+            /* Smaller heading sizes */
+            h1 { font-size: 1.6rem !important; }
+            h2 { font-size: 1.25rem !important; }
+            h3 { font-size: 1.05rem !important; }
+
+            /* Full-width buttons on mobile for easier tap targets */
+            .stButton > button {
+                width: 100% !important;
+                padding: 12px !important;
+            }
+
+            /* Tabs: smaller padding so all 5 fit */
+            .stTabs [data-baseweb="tab"] {
+                padding: 8px 10px !important;
+                font-size: 0.85rem !important;
+            }
+            .stTabs [data-baseweb="tab-list"] {
+                gap: 2px !important;
+                overflow-x: auto;
+            }
+
+            /* Metric cards: tighter padding */
+            [data-testid="stMetric"] {
+                padding: 10px 12px !important;
+            }
+            [data-testid="stMetric"] label {
+                font-size: 0.8rem !important;
+            }
+            [data-testid="stMetricValue"] {
+                font-size: 1.1rem !important;
+            }
+
+            /* DataFrames: shrink font so more fits + proper horizontal scroll */
+            [data-testid="stDataFrame"] {
+                font-size: 0.8rem !important;
+            }
+
+            /* Tighten altair chart padding */
+            .vega-embed {
+                padding: 0 !important;
+            }
+
+            /* Stack all horizontal column layouts vertically on mobile so each
+               column gets full width. This makes 3-across metric cards, chart
+               rows, and centering wrappers work sensibly on narrow screens. */
+            [data-testid="stHorizontalBlock"] {
+                flex-direction: column !important;
+                gap: 0.5rem !important;
+            }
+            [data-testid="stHorizontalBlock"] > div {
+                width: 100% !important;
+                min-width: 0 !important;
+                flex: 1 1 100% !important;
+            }
+        }
     </style>
     """,
     unsafe_allow_html=True,
