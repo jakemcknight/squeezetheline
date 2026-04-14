@@ -363,6 +363,55 @@ def show_table(df: pd.DataFrame, key: str):
         st.rerun()
 
 
+def show_cards(df: pd.DataFrame, key: str):
+    """Compact card-style list for mobile.
+
+    Each pick is a compact button-row with the player, team vs opp, line,
+    delta chip, and hit%. Tapping anywhere on the card opens the detail.
+    """
+    for idx, row in df.reset_index(drop=True).iterrows():
+        name = row["name"]
+        delta = row.get("delta", 0) or 0
+        delta_color = "#22c55e" if delta > 0 else "#ef4444" if delta < 0 else "#8b92a5"
+        arrow = "↑" if delta > 0 else "↓" if delta < 0 else "→"
+        team = row.get("team-code", "")
+        opp = row.get("opponent", "")
+        line = row.get("spread", 0)
+        hit = row.get("hit%", 0) or 0
+        status = row.get("status_short", "") if isinstance(row.get("status_short", ""), str) else ""
+        inj_html = (
+            f'<span style="background:#ef444422;color:#ef4444;padding:2px 6px;'
+            f'border-radius:4px;font-size:0.7rem;font-weight:700;margin-left:6px;">{status}</span>'
+            if status else ""
+        )
+
+        with st.container(border=True):
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.markdown(
+                    f"""
+                    <div style="font-weight:700;font-size:1.05rem;">{name}{inj_html}</div>
+                    <div style="color:#8b92a5;font-size:0.85rem;margin-top:2px;">
+                        {team} vs {opp} · Line <strong style="color:#e6edf3;">{line:.1f}</strong> · Hit <strong style="color:#e6edf3;">{hit:.0f}%</strong>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with c2:
+                st.markdown(
+                    f"""
+                    <div style="text-align:right;color:{delta_color};font-size:1.4rem;
+                                font-weight:700;line-height:1;padding-top:6px;">
+                        {arrow} {abs(delta):.1f}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            if st.button("View detail", key=f"{key}_card_{idx}", use_container_width=True):
+                st.session_state["selected_player"] = name
+                st.rerun()
+
+
 def make_last_n_chart(last_games: list[dict], stat_key: str, stat_label: str, line: float | None, n: int = 10):
     """Build a bar chart of a player's last N games for one stat, with a prop line overlay.
 
@@ -809,12 +858,27 @@ STAT_LABELS = {
     "Steals": "steals",
     "Blocks": "blocks",
 }
-stat_tab = st.radio(
-    "Stat", list(STAT_LABELS.keys()),
-    horizontal=True, label_visibility="collapsed",
-)
+stat_col, view_col = st.columns([4, 1])
+with stat_col:
+    stat_tab = st.radio(
+        "Stat", list(STAT_LABELS.keys()),
+        horizontal=True, label_visibility="collapsed",
+    )
+with view_col:
+    compact = st.toggle("Compact", value=st.session_state.get("compact_view", False),
+                        help="Card layout — better on mobile")
+    st.session_state["compact_view"] = compact
+
 stat = STAT_LABELS[stat_tab]
 result = results[stat]
+
+
+def show_results(df: pd.DataFrame, key: str):
+    """Render results as cards (compact view) or table, based on the toggle."""
+    if st.session_state.get("compact_view"):
+        show_cards(df, key=key)
+    else:
+        show_table(df, key=key)
 
 # --- Sidebar filters ---
 with st.sidebar:
@@ -873,7 +937,7 @@ with tab_strong_o:
         st.info("No strong overs found with current filters.")
     else:
         st.caption(f"All deltas positive + both hit rates > 50% ({len(df_view)} players)")
-        show_table(df_view, key=f"strong_o_{stat}")
+        show_results(df_view, key=f"strong_o_{stat}")
 
 with tab_trend_o:
     df_view = filter_trending_overs(filtered)[show_cols].reset_index(drop=True)
@@ -881,7 +945,7 @@ with tab_trend_o:
         st.info("No trending overs found with current filters.")
     else:
         st.caption(f"All deltas positive ({len(df_view)} players)")
-        show_table(df_view, key=f"trend_o_{stat}")
+        show_results(df_view, key=f"trend_o_{stat}")
 
 with tab_strong_u:
     df_view = filter_strong_unders(filtered)[show_cols].reset_index(drop=True)
@@ -889,7 +953,7 @@ with tab_strong_u:
         st.info("No strong unders found with current filters.")
     else:
         st.caption(f"All deltas negative + both hit rates < 50% ({len(df_view)} players)")
-        show_table(df_view, key=f"strong_u_{stat}")
+        show_results(df_view, key=f"strong_u_{stat}")
 
 with tab_trend_u:
     df_view = filter_trending_unders(filtered)[show_cols].reset_index(drop=True)
@@ -897,9 +961,9 @@ with tab_trend_u:
         st.info("No trending unders found with current filters.")
     else:
         st.caption(f"All deltas negative ({len(df_view)} players)")
-        show_table(df_view, key=f"trend_u_{stat}")
+        show_results(df_view, key=f"trend_u_{stat}")
 
 with tab_all:
     df_view = filtered[show_cols].sort_values("hit%", ascending=False).reset_index(drop=True)
     st.caption(f"{len(df_view)} players")
-    show_table(df_view, key=f"all_{stat}")
+    show_results(df_view, key=f"all_{stat}")
