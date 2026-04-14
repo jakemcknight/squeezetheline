@@ -331,8 +331,8 @@ COLUMN_CONFIG = {
     "delta": st.column_config.NumberColumn("Delta", format="%+.1f"),
     "delta_5g": st.column_config.NumberColumn("Delta 5G", format="%+.1f"),
     "delta_10g": st.column_config.NumberColumn("Delta 10G", format="%+.1f"),
-    "hit%": st.column_config.ProgressColumn("Hit %", min_value=0, max_value=100, format="%.0f%%", width="medium"),
-    "history_hit%": st.column_config.ProgressColumn("Hist Hit %", min_value=0, max_value=100, format="%.0f%%", width="medium"),
+    "hit%": st.column_config.NumberColumn("Hit %", format="%.0f%%", width="medium"),
+    "history_hit%": st.column_config.NumberColumn("Hist Hit %", format="%.0f%%", width="medium"),
     "rank": st.column_config.NumberColumn("Def Rank", format="%.0f"),
     "rest_days": st.column_config.NumberColumn("Rest", format="%.0f", help="Days since last game"),
     "b2b": st.column_config.CheckboxColumn("B2B", help="Back-to-back (played yesterday)"),
@@ -341,15 +341,34 @@ COLUMN_CONFIG = {
 }
 
 
+def _hit_bar_style(val):
+    """Paint a CSS gradient bar: green if >= 50%, red if < 50%."""
+    if pd.isna(val):
+        return ""
+    color = "#22c55e" if val >= 50 else "#ef4444"
+    width = max(0.0, min(100.0, float(val)))
+    return (
+        f"background: linear-gradient(90deg, {color}40 {width}%, transparent {width}%);"
+        "font-weight: 600;"
+    )
+
+
 def show_table(df: pd.DataFrame, key: str):
     """Display a results table with row selection — selecting a row opens the player detail.
 
-    The table auto-sizes each column to its content and is centered on the page.
+    Hit% and Hist Hit% cells get a CSS gradient background — green for
+    50%+ and red for <50% — which also works in row-selection mode.
     """
+    hit_cols = [c for c in ("hit%", "history_hit%") if c in df.columns]
+    if hit_cols:
+        styled = df.style.map(_hit_bar_style, subset=hit_cols)
+    else:
+        styled = df
+
     left, mid, right = st.columns([1, 12, 1])
     with mid:
         event = st.dataframe(
-            df,
+            styled,
             column_config=COLUMN_CONFIG,
             use_container_width=True,
             hide_index=True,
