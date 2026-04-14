@@ -6,6 +6,37 @@ from config import TEAM_CODE_MAP
 from data import load_historical_data
 
 
+def compute_starters(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
+    """Flag each player as a likely starter.
+
+    Heuristic: average minutes in the last `window` games, and if they're in
+    the top 5 on their current team by that average, they're marked a starter.
+
+    Returns: DataFrame with columns [name, starter (bool), mpg_recent].
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["name", "starter", "mpg_recent"])
+
+    recent = df[df["rank"] <= window] if "rank" in df.columns else df
+
+    # Current team per player (already handled by "most recent game" elsewhere,
+    # but recompute here in case caller passes raw df).
+    current_team = (
+        df.sort_values("gameday", ascending=False)
+        .drop_duplicates("name")[["name", "team-code"]]
+    )
+
+    mpg = recent.groupby("name")["minutes"].mean().reset_index(name="mpg_recent")
+    mpg = mpg.merge(current_team, on="name", how="left")
+
+    # Rank within team by recent mpg, top 5 = starters
+    mpg["team_rank"] = mpg.groupby("team-code")["mpg_recent"].rank(
+        method="min", ascending=False
+    )
+    mpg["starter"] = mpg["team_rank"] <= 5
+    return mpg[["name", "starter", "mpg_recent"]]
+
+
 def compute_rest_days(df: pd.DataFrame, game_date: datetime.date) -> pd.DataFrame:
     """For each player, compute days of rest between their last game and `game_date`.
 
@@ -151,6 +182,12 @@ def analyze_stat(
     if game_date is not None:
         rest = compute_rest_days(df, game_date)
         stat_props = stat_props.merge(rest, on="name", how="left")
+
+    # --- Starter flag (top 5 mpg on team in last 10 games) ---
+    starters = compute_starters(df, window=10)
+    stat_props = stat_props.merge(starters, on="name", how="left")
+    # Default missing starter value to False instead of NaN
+    stat_props["starter"] = stat_props["starter"].fillna(False).astype(bool)
 
     # --- Reorder columns so history_hit% is right after hit% ---
     columns = list(stat_props.columns)

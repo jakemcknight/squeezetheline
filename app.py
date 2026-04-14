@@ -233,7 +233,7 @@ STAT_CONFIGS = [
 ]
 
 DISPLAY_COLS = [
-    "name", "status_short", "player_url", "team-code", "opponent", "position", "spread",
+    "name", "status_short", "starter", "player_url", "team-code", "opponent", "position", "spread",
     "delta", "delta_5g", "delta_10g",
     "hit%", "history_hit%",
     "rank", "rest_days", "b2b", "std_dev", "spm",
@@ -299,6 +299,11 @@ def fetch_fresh_data(date: datetime.date):
         result = result.merge(player_urls, on="name", how="left")
         if not injury_join.empty:
             result = result.merge(injury_join, on="name", how="left")
+        # Replace NaN in injury columns with empty strings so healthy players
+        # show a clean blank cell instead of "None"
+        for col in ("status_short", "comment"):
+            if col in result.columns:
+                result[col] = result[col].fillna("")
         results[stat] = result
 
     # Build per-player summaries for the detail view
@@ -323,6 +328,7 @@ def fetch_fresh_data(date: datetime.date):
 COLUMN_CONFIG = {
     "name": st.column_config.TextColumn("Player"),
     "status_short": st.column_config.TextColumn("Inj", help="Injury status (OUT/DBT/Q/DTD/PROB)"),
+    "starter": st.column_config.CheckboxColumn("Starter", help="Top 5 mpg on team in last 10 games"),
     "player_url": st.column_config.LinkColumn("Profile", display_text="NBA.com"),
     "team-code": st.column_config.TextColumn("Team"),
     "opponent": st.column_config.TextColumn("Opp"),
