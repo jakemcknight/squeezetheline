@@ -278,12 +278,14 @@ def make_last_n_chart(last_games: list[dict], stat_key: str, stat_label: str, li
     recent = list(reversed(last_games[:n]))
     df = pd.DataFrame(recent)
     df["game_num"] = range(1, len(df) + 1)
+    # Short date label like "4/13" for the x-axis
+    df["date_short"] = pd.to_datetime(df["date"]).dt.strftime("%-m/%-d") if os.name != "nt" else pd.to_datetime(df["date"]).dt.strftime("%#m/%#d")
     df["label"] = df.apply(lambda r: f"{r['date']}\nvs {r['opponent']}", axis=1)
     if line is not None:
         df["hit"] = df[stat_key] > line
 
     bars = alt.Chart(df).mark_bar(size=28).encode(
-        x=alt.X("game_num:O", title=None, axis=alt.Axis(labels=False, ticks=False)),
+        x=alt.X("date_short:N", title=None, sort=list(df["date_short"]), axis=alt.Axis(labelAngle=0)),
         y=alt.Y(f"{stat_key}:Q", title=stat_label),
         color=(
             alt.Color(
