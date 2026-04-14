@@ -415,23 +415,37 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             "date": "Date", "opponent": "Opp", "min": "MIN",
             "pts": "PTS", "reb": "REB", "ast": "AST",
         })
-        # Color hit/miss vs today's lines
-        def highlight_hits(row):
-            styles = [""] * len(row)
-            for col, stat in [("PTS", "points"), ("REB", "rebounds"), ("AST", "assists")]:
-                line = lines.get(stat)
-                if line is not None and col in row.index:
-                    val = row[col]
-                    idx = row.index.get_loc(col)
-                    if val > line:
-                        styles[idx] = "background-color: rgba(0, 200, 0, 0.25)"
-                    elif val < line:
-                        styles[idx] = "background-color: rgba(200, 0, 0, 0.25)"
-            return styles
 
-        styled = games_df.style.apply(highlight_hits, axis=1).format({
-            "MIN": "{:.0f}", "PTS": "{:.0f}", "REB": "{:.0f}", "AST": "{:.0f}",
-        })
+        # Build a delta chip for each stat relative to tonight's line
+        def delta_chip(val, line):
+            if line is None or pd.isna(val):
+                return ""
+            d = val - line
+            arrow = "↑" if d > 0 else "↓" if d < 0 else "→"
+            return f"{arrow} {abs(d):.1f}"
+
+        games_df["vs PTS"] = games_df["PTS"].apply(lambda v: delta_chip(v, lines.get("points")))
+        games_df["vs REB"] = games_df["REB"].apply(lambda v: delta_chip(v, lines.get("rebounds")))
+        games_df["vs AST"] = games_df["AST"].apply(lambda v: delta_chip(v, lines.get("assists")))
+
+        # Reorder so each stat is followed by its delta chip
+        col_order = ["Date", "Opp", "MIN", "PTS", "vs PTS", "REB", "vs REB", "AST", "vs AST"]
+        games_df = games_df[[c for c in col_order if c in games_df.columns]]
+
+        def color_delta(val):
+            if not isinstance(val, str) or not val:
+                return ""
+            if val.startswith("↑"):
+                return "color: #22c55e; font-weight: 600;"
+            if val.startswith("↓"):
+                return "color: #ef4444; font-weight: 600;"
+            return "color: #8b92a5; font-weight: 600;"
+
+        styled = (
+            games_df.style
+            .format({"MIN": "{:.0f}", "PTS": "{:.0f}", "REB": "{:.0f}", "AST": "{:.0f}"})
+            .map(color_delta, subset=["vs PTS", "vs REB", "vs AST"])
+        )
         _, games_mid, _ = st.columns([1, 6, 1])
         with games_mid:
             st.dataframe(styled, use_container_width=True, hide_index=True)
