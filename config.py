@@ -33,7 +33,8 @@ def get_odds_api_key() -> str:
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 PREFERRED_BOOKMAKER = "draftkings"  # fallback to first available if not found
 
-# Team code mappings — defense data sources use different abbreviations
+# HashtagBasketball defense abbreviations → the 3-letter codes we use elsewhere
+# (NatStat-style codes for BRK/CHH, standard codes everywhere else).
 TEAM_CODE_MAP = {
     "GS": "GSW",
     "BKN": "BRK",
@@ -41,6 +42,7 @@ TEAM_CODE_MAP = {
     "NO": "NOP",
     "NY": "NYK",
     "CHA": "CHH",
+    "PHO": "PHX",
 }
 
 # nba_api team abbreviations → NatStat-style codes (for historical data consistency)
