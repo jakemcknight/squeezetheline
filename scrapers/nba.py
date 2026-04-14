@@ -27,6 +27,18 @@ def _map_team_code(code: str) -> str:
     return NBA_API_TEAM_CODE_MAP.get(code, code)
 
 
+def _extract_opponent(matchup: str, team_abbr: str) -> str:
+    """Extract opponent code from a MATCHUP like 'LAL vs. BOS' or 'LAL @ BOS'."""
+    if not isinstance(matchup, str):
+        return ""
+    cleaned = matchup.replace("vs.", "|").replace("@", "|")
+    for part in cleaned.split("|"):
+        code = part.strip()
+        if code and code != team_abbr:
+            return code
+    return ""
+
+
 def get_current_season_stats() -> pd.DataFrame:
     """
     Fetch all player game logs for the current NBA season.
@@ -46,6 +58,10 @@ def get_current_season_stats() -> pd.DataFrame:
     df = pd.DataFrame()
     df["name"] = raw["PLAYER_NAME"]
     df["team-code"] = raw["TEAM_ABBREVIATION"].apply(_map_team_code)
+    df["opponent"] = raw.apply(
+        lambda r: _map_team_code(_extract_opponent(r["MATCHUP"], r["TEAM_ABBREVIATION"])),
+        axis=1,
+    )
     df["gameday"] = pd.to_datetime(raw["GAME_DATE"])
     df["minutes"] = pd.to_numeric(raw["MIN"], errors="coerce").fillna(0)
     df["points"] = pd.to_numeric(raw["PTS"], errors="coerce").fillna(0)

@@ -236,6 +236,7 @@ DISPLAY_COLS = [
     "name", "status_short", "starter", "player_url", "team-code", "opponent", "position", "spread",
     "delta", "delta_5g", "delta_10g",
     "hit%", "history_hit%",
+    "vs_opp_season", "vs_opp_career",
     "rank", "rest_days", "b2b", "std_dev", "spm",
 ]
 
@@ -339,6 +340,8 @@ COLUMN_CONFIG = {
     "delta_10g": st.column_config.NumberColumn("Delta 10G", format="%+.1f"),
     "hit%": st.column_config.NumberColumn("Hit %", format="%.0f%%", width="medium"),
     "history_hit%": st.column_config.NumberColumn("Hist Hit %", format="%.0f%%", width="medium"),
+    "vs_opp_season": st.column_config.TextColumn("vs Opp (Szn)", help="Games this season beat tonight's line / games vs this opponent this season"),
+    "vs_opp_career": st.column_config.TextColumn("vs Opp (Career)", help="Career games beat tonight's line / total career games vs this opponent"),
     "rank": st.column_config.NumberColumn("Def Rank", format="%.0f"),
     "rest_days": st.column_config.NumberColumn("Rest", format="%.0f", help="Days since last game"),
     "b2b": st.column_config.CheckboxColumn("B2B", help="Back-to-back (played yesterday)"),
@@ -944,6 +947,8 @@ then flags plays where the player is trending strongly above or below the line.
 | **Delta 10G** | Same, but last 10 games |
 | **Hit %** | % of this season's games where the player exceeded tonight's line. Green bar ≥ 50%, red bar < 50% |
 | **Hist Hit %** | % of the player's entire career (2014-present) where they exceeded tonight's line |
+| **vs Opp (Szn)** | Games this season where the player beat tonight's line / total games vs tonight's opponent this season (e.g. `2/3` = 2 of 3 games) |
+| **vs Opp (Career)** | Same but across their full career (2014-present) |
 | **Def Rank** | Opponent's defense-vs-position rank for this stat. **1 = toughest defense**, **30 = weakest**. Higher rank = better matchup for overs. Blank if the stat doesn't have defense data (e.g., PRA) |
 | **Rest** | Days of rest since the player's last game |
 | **B2B** | ✓ if the player also played yesterday (back-to-back) |

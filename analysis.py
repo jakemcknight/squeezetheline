@@ -178,6 +178,37 @@ def analyze_stat(
     else:
         stat_props["history_hit%"] = None
 
+    # --- Performance vs tonight's opponent (season + career) ---
+    def _vs_opp_str(row, source_df, has_opponent_col):
+        if not has_opponent_col or pd.isna(row.get("opponent")) or not row.get("opponent"):
+            return ""
+        opp = row["opponent"]
+        games = source_df[
+            (source_df["name"] == row["name"])
+            & (source_df["opponent"] == opp)
+            & (source_df["minutes"] != 0)
+        ]
+        if games.empty:
+            return "0/0"
+        hits = int((games[stat] > row["spread"]).sum())
+        return f"{hits}/{len(games)}"
+
+    # Season vs this opponent (current_stats, i.e. df)
+    if "opponent" in df.columns:
+        stat_props["vs_opp_season"] = stat_props.apply(
+            lambda r: _vs_opp_str(r, df, True), axis=1
+        )
+    else:
+        stat_props["vs_opp_season"] = ""
+
+    # Career vs this opponent (all historical data)
+    if not history.empty and "opponent" in history.columns:
+        stat_props["vs_opp_career"] = stat_props.apply(
+            lambda r: _vs_opp_str(r, history, True), axis=1
+        )
+    else:
+        stat_props["vs_opp_career"] = ""
+
     # --- Rest days / back-to-back ---
     if game_date is not None:
         rest = compute_rest_days(df, game_date)
