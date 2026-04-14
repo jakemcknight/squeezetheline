@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+from io import StringIO
 
 import streamlit as st
 import pandas as pd
@@ -91,7 +92,7 @@ def load_daily_results(date: datetime.date):
     with open(path) as f:
         payload = json.load(f)
     events = payload["events"]
-    results = {stat: pd.read_json(df_json) for stat, df_json in payload["results"].items()}
+    results = {stat: pd.read_json(StringIO(df_json)) for stat, df_json in payload["results"].items()}
     summaries = payload.get("summaries", {})
     return events, results, summaries
 
