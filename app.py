@@ -906,6 +906,61 @@ with view_col:
                         help="Card layout — better on mobile")
     st.session_state["compact_view"] = compact
 
+# --- About / glossary expander ---
+with st.expander("About & column reference"):
+    st.markdown(
+        """
+### How it works
+Squeeze the Line compares each player's historical stats to tonight's sportsbook lines,
+then flags plays where the player is trending strongly above or below the line.
+
+- **Prop lines** come from **The Odds API** (DraftKings feed)
+- **Current season stats** come from **NBA.com** (`nba_api`)
+- **Career history** goes back to the **2014-15 season** (~320k player-game rows)
+- **Defense rankings** come from **HashtagBasketball**
+- **Injury report** comes from **ESPN** (daily)
+
+### Pick categories (tabs)
+| Category | Criteria |
+|---|---|
+| **Strong Overs** | Season avg, last-5, and last-10 avg all **above** line **AND** current hit% > 50% **AND** history hit% > 50% |
+| **Trending Overs** | Season avg, last-5, and last-10 avg all **above** line (no hit-rate check) |
+| **Strong Unders** | All three averages **below** line **AND** both hit rates < 50% |
+| **Trending Unders** | All three averages **below** line (no hit-rate check) |
+| **All Players** | Everyone with a line, no filter |
+
+### Column reference
+| Column | Meaning |
+|---|---|
+| **Player** | Click the row to see a detailed player page |
+| **Inj** | Injury status from ESPN — OUT, DBT (Doubtful), Q (Questionable), DTD (Day-to-Day), PROB (Probable). Blank means the player is healthy/not listed |
+| **Starter** | ✓ if the player is in the **top 5 minutes-per-game on their team over the last 10 games**. Adapts to injuries and rotation changes automatically |
+| **Profile** | Link to the player's NBA.com profile |
+| **Team / Opp** | Player's current team and tonight's opponent |
+| **Pos** | Position (PG/SG/SF/PF/C) from NBA.com |
+| **Line** | Tonight's sportsbook over/under line for the selected stat |
+| **Delta** | Season average minus the line. Positive = player averages above the line this season |
+| **Delta 5G** | Same, but using the player's last 5 games only |
+| **Delta 10G** | Same, but last 10 games |
+| **Hit %** | % of this season's games where the player exceeded tonight's line. Green bar ≥ 50%, red bar < 50% |
+| **Hist Hit %** | % of the player's entire career (2014-present) where they exceeded tonight's line |
+| **Def Rank** | Opponent's defense-vs-position rank for this stat. **1 = toughest defense**, **30 = weakest**. Higher rank = better matchup for overs. Blank if the stat doesn't have defense data (e.g., PRA) |
+| **Rest** | Days of rest since the player's last game |
+| **B2B** | ✓ if the player also played yesterday (back-to-back) |
+| **Std Dev** | How much this stat varies game-to-game. Higher = more volatile player |
+| **SPM** | Stat per minute — the player's production rate when on the floor |
+
+### Player detail page
+Clicking any row (or selecting a player from the search) opens a detail page with:
+- **Today's lines** with deltas vs. season average
+- **Averages table** — this season and career, across all stats
+- **Last 10 Games bar charts** — green bars beat tonight's line, red bars missed, with a dashed line marking the prop
+- **Last 20 Games table** — colored text showing how much each stat beat or missed the line by
+- **Hit Rate vs Today's Lines** — how often the player has beat tonight's line in their last 20 games
+- **Career vs {tonight's opponent}** — their history specifically against this team (if any)
+        """
+    )
+
 stat = STAT_LABELS[stat_tab]
 if stat not in results:
     st.warning(
