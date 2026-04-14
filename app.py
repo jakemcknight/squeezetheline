@@ -416,35 +416,47 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             "pts": "PTS", "reb": "REB", "ast": "AST",
         })
 
-        # Build a delta chip for each stat relative to tonight's line
-        def delta_chip(val, line):
-            if line is None or pd.isna(val):
+        # Format each stat cell as "value  ↑/↓ delta"
+        def format_stat(val, line):
+            if pd.isna(val):
                 return ""
+            base = f"{val:.0f}"
+            if line is None:
+                return base
             d = val - line
-            arrow = "↑" if d > 0 else "↓" if d < 0 else "→"
-            return f"{arrow} {abs(d):.1f}"
+            if d > 0:
+                return f"{base}  ↑ {d:.1f}"
+            if d < 0:
+                return f"{base}  ↓ {abs(d):.1f}"
+            return base
 
-        games_df["vs PTS"] = games_df["PTS"].apply(lambda v: delta_chip(v, lines.get("points")))
-        games_df["vs REB"] = games_df["REB"].apply(lambda v: delta_chip(v, lines.get("rebounds")))
-        games_df["vs AST"] = games_df["AST"].apply(lambda v: delta_chip(v, lines.get("assists")))
-
-        # Reorder so each stat is followed by its delta chip
-        col_order = ["Date", "Opp", "MIN", "PTS", "vs PTS", "REB", "vs REB", "AST", "vs AST"]
-        games_df = games_df[[c for c in col_order if c in games_df.columns]]
-
-        def color_delta(val):
-            if not isinstance(val, str) or not val:
-                return ""
-            if val.startswith("↑"):
-                return "color: #22c55e; font-weight: 600;"
-            if val.startswith("↓"):
-                return "color: #ef4444; font-weight: 600;"
-            return "color: #8b92a5; font-weight: 600;"
+        # Color each stat cell based on whether it beat the line
+        def color_stat(row):
+            styles = ["" for _ in row]
+            for stat_col, line_key in [("PTS", "points"), ("REB", "rebounds"), ("AST", "assists")]:
+                if stat_col not in row.index:
+                    continue
+                val = row[stat_col]
+                line = lines.get(line_key)
+                if line is None or pd.isna(val):
+                    continue
+                idx = row.index.get_loc(stat_col)
+                d = val - line
+                if d > 0:
+                    styles[idx] = "color: #22c55e; font-weight: 600;"
+                elif d < 0:
+                    styles[idx] = "color: #ef4444; font-weight: 600;"
+            return styles
 
         styled = (
             games_df.style
-            .format({"MIN": "{:.0f}", "PTS": "{:.0f}", "REB": "{:.0f}", "AST": "{:.0f}"})
-            .map(color_delta, subset=["vs PTS", "vs REB", "vs AST"])
+            .format({
+                "MIN": "{:.0f}",
+                "PTS": lambda v: format_stat(v, lines.get("points")),
+                "REB": lambda v: format_stat(v, lines.get("rebounds")),
+                "AST": lambda v: format_stat(v, lines.get("assists")),
+            })
+            .apply(color_stat, axis=1)
         )
         _, games_mid, _ = st.columns([1, 6, 1])
         with games_mid:
