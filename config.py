@@ -18,11 +18,11 @@ DATA_DIR = "data"
 # --- The Odds API (player props) ---
 # Sign up for a free key at https://the-odds-api.com
 # Set ODDS_API_KEY as an environment variable, or in .streamlit/secrets.toml when deployed
-def _get_odds_api_key() -> str:
+def get_odds_api_key() -> str:
+    """Read the Odds API key lazily so Streamlit secrets are available at call time."""
     key = os.environ.get("ODDS_API_KEY")
     if key:
         return key
-    # Try Streamlit secrets (only available when running under streamlit)
     try:
         import streamlit as st
         return st.secrets["ODDS_API_KEY"]
@@ -30,7 +30,6 @@ def _get_odds_api_key() -> str:
         return ""
 
 
-ODDS_API_KEY = _get_odds_api_key()
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 PREFERRED_BOOKMAKER = "draftkings"  # fallback to first available if not found
 

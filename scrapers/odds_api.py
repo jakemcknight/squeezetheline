@@ -14,7 +14,7 @@ import requests
 import pandas as pd
 from zoneinfo import ZoneInfo
 
-from config import ODDS_API_KEY, ODDS_API_BASE, PREFERRED_BOOKMAKER, TEAM_NAME_TO_CODE
+from config import ODDS_API_BASE, PREFERRED_BOOKMAKER, TEAM_NAME_TO_CODE, get_odds_api_key
 
 # Map The Odds API market keys to the prop type names used in the analysis
 MARKET_MAP = {
@@ -37,7 +37,7 @@ def get_nba_events() -> list[dict]:
     Returns a list of dicts with keys: id, home_team, away_team, commence_time.
     """
     url = f"{ODDS_API_BASE}/sports/basketball_nba/events"
-    resp = requests.get(url, params={"apiKey": ODDS_API_KEY})
+    resp = requests.get(url, params={"apiKey": get_odds_api_key()})
     resp.raise_for_status()
     return resp.json()
 
@@ -70,7 +70,7 @@ def get_event_props(event_id: str) -> list[dict]:
     """
     url = f"{ODDS_API_BASE}/sports/basketball_nba/events/{event_id}/odds"
     resp = requests.get(url, params={
-        "apiKey": ODDS_API_KEY,
+        "apiKey": get_odds_api_key(),
         "regions": "us",
         "markets": MARKETS,
         "oddsFormat": "american",
