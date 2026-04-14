@@ -390,11 +390,11 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             "AST": career_avg.get("assists", 0),
         },
     ])
-    _, avg_mid, _ = st.columns([1, 3, 1])
+    _, avg_mid, _ = st.columns([1, 6, 1])
     with avg_mid:
         st.dataframe(
             avg_df,
-            use_container_width=False,
+            use_container_width=True,
             hide_index=True,
             column_config={
                 "MIN": st.column_config.NumberColumn(format="%.1f"),
@@ -458,9 +458,9 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             })
             .apply(color_stat, axis=1)
         )
-        _, games_mid, _ = st.columns([1, 3, 1])
+        _, games_mid, _ = st.columns([1, 6, 1])
         with games_mid:
-            st.dataframe(styled, use_container_width=False, hide_index=True)
+            st.dataframe(styled, use_container_width=True, hide_index=True)
 
         # Hit rate over last 20 vs current line
         st.subheader("Hit Rate vs Today's Lines (Last 20)")
