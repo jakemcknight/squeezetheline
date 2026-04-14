@@ -235,7 +235,7 @@ DISPLAY_COLS = [
     "name", "player_url", "team-code", "opponent", "position", "spread",
     "delta", "delta_5g", "delta_10g",
     "hit%", "history_hit%",
-    "rank", "std_dev", "spm",
+    "rank", "rest_days", "b2b", "std_dev", "spm",
 ]
 
 CACHE_DIR = os.path.join(DATA_DIR, "daily_cache")
@@ -286,13 +286,13 @@ def fetch_fresh_data(date: datetime.date):
 
     results = {}
     for stat, prop_type in STAT_CONFIGS:
-        result = analyze_stat(stat, prop_type, df, props, todays_games, defense)
+        result = analyze_stat(stat, prop_type, df, props, todays_games, defense, game_date=date)
         result = result.merge(player_urls, on="name", how="left")
         results[stat] = result
 
     # Build per-player summaries for the detail view
     all_players = sorted(set(props["name"].dropna().unique()))
-    summaries = build_player_summaries(all_players, df, props)
+    summaries = build_player_summaries(all_players, df, props, todays_games=todays_games)
 
     return events, results, summaries
 
@@ -310,6 +310,8 @@ COLUMN_CONFIG = {
     "hit%": st.column_config.ProgressColumn("Hit %", min_value=0, max_value=100, format="%.0f%%", width="medium"),
     "history_hit%": st.column_config.ProgressColumn("Hist Hit %", min_value=0, max_value=100, format="%.0f%%", width="medium"),
     "rank": st.column_config.NumberColumn("Def Rank", format="%.0f"),
+    "rest_days": st.column_config.NumberColumn("Rest", format="%.0f", help="Days since last game"),
+    "b2b": st.column_config.CheckboxColumn("B2B", help="Back-to-back (played yesterday)"),
     "std_dev": st.column_config.NumberColumn("Std Dev", format="%.1f"),
     "spm": st.column_config.NumberColumn("SPM", format="%.2f"),
 }
@@ -558,23 +560,109 @@ def render_player_detail(name: str, summaries: dict, results: dict):
 
         # Hit rate over last 20 vs current line
         st.subheader("Hit Rate vs Today's Lines (Last 20)")
-        cols = st.columns(3)
-        for i, (label, stat, col) in enumerate([
-            ("Points", "points", "PTS"),
-            ("Rebounds", "rebounds", "REB"),
-            ("Assists", "assists", "AST"),
-        ]):
-            with cols[i]:
-                line = lines.get(stat)
-                if line is None:
-                    st.metric(label, "—")
-                else:
-                    hits = sum(1 for g in last_20 if g[col.lower().replace("pts","pts")] > line)
-                    # quick correct mapping
-                    key_map = {"PTS":"pts","REB":"reb","AST":"ast"}
-                    hits = sum(1 for g in last_20 if g[key_map[col]] > line)
+        hit_stats = [
+            ("Points", "points", "pts"),
+            ("Rebounds", "rebounds", "reb"),
+            ("Assists", "assists", "ast"),
+            ("PRA", "pra", "pra"),
+            ("3PM", "threes", "threes"),
+            ("Steals", "steals", "steals"),
+            ("Blocks", "blocks", "blocks"),
+        ]
+        active = [s for s in hit_stats if lines.get(s[1]) is not None]
+        if active:
+            n_cols = min(len(active), 4)
+            cols = st.columns(n_cols)
+            for i, (label, line_key, game_key) in enumerate(active):
+                with cols[i % n_cols]:
+                    line = lines.get(line_key)
+                    hits = sum(1 for g in last_20 if g.get(game_key, 0) > line)
                     pct = (hits / len(last_20)) * 100
                     st.metric(label, f"{hits}/{len(last_20)}", delta=f"{pct:.0f}%")
+
+    # --- History vs tonight's opponent ---
+    vs_opp = summary.get("vs_opponent", [])
+    vs_opp_avg = summary.get("vs_opponent_avg")
+    if vs_opp:
+        opp_code = vs_opp_avg.get("opponent") if vs_opp_avg else "opponent"
+        st.subheader(f"Career vs {opp_code} ({len(vs_opp)} most recent · {vs_opp_avg['games'] if vs_opp_avg else 0} total)")
+
+        # Summary averages row
+        if vs_opp_avg:
+            avg_row = pd.DataFrame([{
+                "Window": f"Career vs {opp_code}",
+                "MIN": vs_opp_avg.get("minutes", 0),
+                "PTS": vs_opp_avg.get("points", 0),
+                "REB": vs_opp_avg.get("rebounds", 0),
+                "AST": vs_opp_avg.get("assists", 0),
+                "PRA": vs_opp_avg.get("pra", 0),
+                "3PM": vs_opp_avg.get("threes", 0),
+                "STL": vs_opp_avg.get("steals", 0),
+                "BLK": vs_opp_avg.get("blocks", 0),
+            }])
+            _, opp_avg_mid, _ = st.columns([1, 6, 1])
+            with opp_avg_mid:
+                st.dataframe(avg_row, use_container_width=True, hide_index=True, column_config={
+                    "MIN": st.column_config.NumberColumn(format="%.1f"),
+                    "PTS": st.column_config.NumberColumn(format="%.1f"),
+                    "REB": st.column_config.NumberColumn(format="%.1f"),
+                    "AST": st.column_config.NumberColumn(format="%.1f"),
+                    "PRA": st.column_config.NumberColumn(format="%.1f"),
+                    "3PM": st.column_config.NumberColumn(format="%.1f"),
+                    "STL": st.column_config.NumberColumn(format="%.1f"),
+                    "BLK": st.column_config.NumberColumn(format="%.1f"),
+                })
+
+        # Recent matchups table with the same coloring treatment as Last 20
+        opp_df = pd.DataFrame(vs_opp)
+        opp_df = opp_df.rename(columns={
+            "date": "Date", "opponent": "Opp", "min": "MIN",
+            "pts": "PTS", "reb": "REB", "ast": "AST",
+        })
+
+        def format_stat_opp(val, line):
+            if pd.isna(val):
+                return ""
+            base = f"{val:.0f}"
+            if line is None:
+                return base
+            d = val - line
+            if d > 0:
+                return f"{base}  ↑ {d:.1f}"
+            if d < 0:
+                return f"{base}  ↓ {abs(d):.1f}"
+            return base
+
+        def color_opp(row):
+            styles = ["" for _ in row]
+            for stat_col, line_key in [("PTS", "points"), ("REB", "rebounds"), ("AST", "assists")]:
+                if stat_col not in row.index:
+                    continue
+                val = row[stat_col]
+                line = lines.get(line_key)
+                if line is None or pd.isna(val):
+                    continue
+                idx = row.index.get_loc(stat_col)
+                d = val - line
+                if d > 0:
+                    styles[idx] = "color: #22c55e; font-weight: 600;"
+                elif d < 0:
+                    styles[idx] = "color: #ef4444; font-weight: 600;"
+            return styles
+
+        styled_opp = (
+            opp_df.style
+            .format({
+                "MIN": "{:.0f}",
+                "PTS": lambda v: format_stat_opp(v, lines.get("points")),
+                "REB": lambda v: format_stat_opp(v, lines.get("rebounds")),
+                "AST": lambda v: format_stat_opp(v, lines.get("assists")),
+            })
+            .apply(color_opp, axis=1)
+        )
+        _, opp_mid, _ = st.columns([1, 6, 1])
+        with opp_mid:
+            st.dataframe(styled_opp, use_container_width=True, hide_index=True)
 
 
 # --- Header ---

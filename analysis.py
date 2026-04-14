@@ -1,7 +1,28 @@
+import datetime
+
 import pandas as pd
 
 from config import TEAM_CODE_MAP
 from data import load_historical_data
+
+
+def compute_rest_days(df: pd.DataFrame, game_date: datetime.date) -> pd.DataFrame:
+    """For each player, compute days of rest between their last game and `game_date`.
+
+    Returns a DataFrame with columns: name, rest_days, last_game, b2b (bool).
+    `b2b` (back-to-back) is True when the player played the calendar day before
+    `game_date`.
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["name", "rest_days", "last_game", "b2b"])
+
+    latest = df.sort_values("gameday", ascending=False).drop_duplicates("name")[["name", "gameday"]]
+    latest = latest.rename(columns={"gameday": "last_game"})
+    target = pd.Timestamp(game_date)
+    latest["rest_days"] = (target - latest["last_game"]).dt.days
+    latest["b2b"] = latest["rest_days"] == 1
+    latest["last_game"] = latest["last_game"].dt.strftime("%Y-%m-%d")
+    return latest
 
 
 def analyze_stat(
@@ -11,6 +32,7 @@ def analyze_stat(
     props: pd.DataFrame,
     todays_games: dict[str, str],
     defense: pd.DataFrame,
+    game_date: datetime.date | None = None,
 ) -> pd.DataFrame:
     """
     Core analysis for a single stat type (points, rebounds, assists).
@@ -123,6 +145,11 @@ def analyze_stat(
     else:
         stat_props["history_hit%"] = None
 
+    # --- Rest days / back-to-back ---
+    if game_date is not None:
+        rest = compute_rest_days(df, game_date)
+        stat_props = stat_props.merge(rest, on="name", how="left")
+
     # --- Reorder columns so history_hit% is right after hit% ---
     columns = list(stat_props.columns)
     if "hit%" in columns and "history_hit%" in columns:
@@ -178,6 +205,7 @@ def build_player_summaries(
     player_names: list[str],
     current_stats: pd.DataFrame,
     props: pd.DataFrame,
+    todays_games: dict[str, str] | None = None,
 ) -> dict:
     """
     Build a summary for each player who has a prop line today.
@@ -296,6 +324,44 @@ def build_player_summaries(
                         "blocks": float(g.get("blocks", 0)),
                     })
 
+        # --- Historical performance vs tonight's opponent ---
+        vs_opponent = []
+        vs_opponent_avg = None
+        if todays_games and team and not history_renamed.empty:
+            opp = todays_games.get(team, "")
+            if opp:
+                vs_games = history_renamed[
+                    (history_renamed["name"] == name)
+                    & (history_renamed["opponent"] == opp)
+                    & (history_renamed["minutes"] != 0)
+                ].sort_values("gameday", ascending=False)
+                for _, g in vs_games.head(10).iterrows():
+                    vs_opponent.append({
+                        "date": str(g["gameday"].date()) if pd.notna(g["gameday"]) else "",
+                        "opponent": g.get("opponent", ""),
+                        "min": float(g["minutes"]),
+                        "pts": float(g["points"]),
+                        "reb": float(g["rebounds"]),
+                        "ast": float(g["assists"]),
+                        "pra": float(g.get("pra", 0)),
+                        "threes": float(g.get("threes", 0)),
+                        "steals": float(g.get("steals", 0)),
+                        "blocks": float(g.get("blocks", 0)),
+                    })
+                if len(vs_games):
+                    vs_opponent_avg = {
+                        "games": int(len(vs_games)),
+                        "opponent": opp,
+                        "minutes": _avg(vs_games, "minutes"),
+                        "points": _avg(vs_games, "points"),
+                        "rebounds": _avg(vs_games, "rebounds"),
+                        "assists": _avg(vs_games, "assists"),
+                        "pra": _avg(vs_games, "pra"),
+                        "threes": _avg(vs_games, "threes"),
+                        "steals": _avg(vs_games, "steals"),
+                        "blocks": _avg(vs_games, "blocks"),
+                    }
+
         summaries[name] = {
             "team": team,
             "position": position,
@@ -303,6 +369,8 @@ def build_player_summaries(
             "season_avg": season_avg,
             "career_avg": career_avg,
             "last_20": last_20,
+            "vs_opponent": vs_opponent,
+            "vs_opponent_avg": vs_opponent_avg,
         }
 
     return summaries
