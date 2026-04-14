@@ -818,6 +818,20 @@ result = results[stat]
 
 # --- Sidebar filters ---
 with st.sidebar:
+    # --- Player search ---
+    st.header("Player")
+    all_player_names = sorted(summaries.keys()) if summaries else []
+    picked = st.selectbox(
+        "Search for a player",
+        options=[""] + all_player_names,
+        index=0,
+        placeholder="Type a name...",
+        label_visibility="collapsed",
+    )
+    if picked:
+        st.session_state["selected_player"] = picked
+        st.rerun()
+
     st.header("Filters")
 
     teams = sorted(result["team-code"].dropna().unique())
