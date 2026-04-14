@@ -20,9 +20,11 @@ from analysis import (
     build_player_summaries,
 )
 
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
+
 st.set_page_config(
     page_title="Squeeze the Line",
-    page_icon="\U0001f3c0",
+    page_icon=LOGO_PATH if os.path.exists(LOGO_PATH) else "\U0001f3c0",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -120,14 +122,18 @@ def check_password() -> bool:
     # Center the password gate
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
+        st.write("")
+        st.write("")
+        if os.path.exists(LOGO_PATH):
+            # st.image centers better when wrapped in an inner column trio
+            _, logo_mid, _ = st.columns([1, 2, 1])
+            with logo_mid:
+                st.image(LOGO_PATH, use_container_width=True)
         st.markdown(
             """
-            <div style="text-align: center; padding-top: 80px;">
-                <h1 style="margin: 0; font-size: 3rem;">Squeeze the Line</h1>
-                <p style="color: #8b92a5; margin-top: 8px; margin-bottom: 32px;">
-                    NBA player props · data-driven picks
-                </p>
-            </div>
+            <p style="text-align: center; color: #8b92a5; margin-top: 4px; margin-bottom: 32px;">
+                NBA player props · data-driven picks
+            </p>
             """,
             unsafe_allow_html=True,
         )
@@ -445,17 +451,20 @@ def render_player_detail(name: str, summaries: dict, results: dict):
 # --- Header ---
 header_col, date_col = st.columns([3, 1])
 with header_col:
-    st.markdown(
-        """
-        <div style="margin-bottom: -8px;">
-            <h1 style="margin: 0; font-size: 2.8rem;">Squeeze the Line</h1>
-            <p style="margin: 0; color: #8b92a5; font-size: 1rem; letter-spacing: 0.02em;">
-                NBA player props · data-driven picks
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    logo_col, tag_col = st.columns([1, 2], gap="small")
+    with logo_col:
+        st.image(LOGO_PATH, width=160)
+    with tag_col:
+        st.markdown(
+            """
+            <div style="padding-top: 38px;">
+                <p style="margin: 0; color: #8b92a5; font-size: 1rem; letter-spacing: 0.02em;">
+                    NBA player props · data-driven picks
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 with st.sidebar:
     selected_date = st.date_input("Game Date", value=datetime.date.today())
@@ -463,7 +472,7 @@ with st.sidebar:
 with date_col:
     st.markdown(
         f"""
-        <div style="text-align: right; padding-top: 18px; color: #8b92a5;">
+        <div style="text-align: right; padding-top: 38px; color: #8b92a5;">
             <div style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.1em;">Slate</div>
             <div style="color: #e6edf3; font-size: 1.1rem; font-weight: 600;">
                 {selected_date.strftime("%a, %b %d")}
