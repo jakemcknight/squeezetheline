@@ -342,13 +342,18 @@ COLUMN_CONFIG = {
 
 
 def _hit_bar_style(val):
-    """Paint a CSS gradient bar: green if >= 50%, red if < 50%."""
+    """Paint the cell with a green or red bar based on the value (0-100)."""
     if pd.isna(val):
         return ""
-    color = "#22c55e" if val >= 50 else "#ef4444"
+    # Use rgba so the bar has a visible fill without hiding text
+    if val >= 50:
+        color = "rgba(34, 197, 94, 0.45)"
+    else:
+        color = "rgba(239, 68, 68, 0.45)"
     width = max(0.0, min(100.0, float(val)))
     return (
-        f"background: linear-gradient(90deg, {color}40 {width}%, transparent {width}%);"
+        f"background-image: linear-gradient(90deg, {color} {width}%, transparent {width}%);"
+        "background-repeat: no-repeat;"
         "font-weight: 600;"
     )
 
@@ -356,12 +361,19 @@ def _hit_bar_style(val):
 def show_table(df: pd.DataFrame, key: str):
     """Display a results table with row selection — selecting a row opens the player detail.
 
-    Hit% and Hist Hit% cells get a CSS gradient background — green for
-    50%+ and red for <50% — which also works in row-selection mode.
+    Hit% and Hist Hit% cells get a colored bar (green ≥ 50%, red < 50%).
+    We strip column_config for those columns so Streamlit doesn't override
+    the Styler background with its own cell renderer.
     """
     hit_cols = [c for c in ("hit%", "history_hit%") if c in df.columns]
+
+    # Build column_config excluding the hit% columns so Styler backgrounds render
+    col_cfg = {k: v for k, v in COLUMN_CONFIG.items() if k not in hit_cols}
+
     if hit_cols:
-        styled = df.style.map(_hit_bar_style, subset=hit_cols)
+        styled = df.style.map(_hit_bar_style, subset=hit_cols).format(
+            {c: "{:.0f}%" for c in hit_cols}
+        )
     else:
         styled = df
 
@@ -369,7 +381,7 @@ def show_table(df: pd.DataFrame, key: str):
     with mid:
         event = st.dataframe(
             styled,
-            column_config=COLUMN_CONFIG,
+            column_config=col_cfg,
             use_container_width=True,
             hide_index=True,
             on_select="rerun",
