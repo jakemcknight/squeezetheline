@@ -5,6 +5,7 @@ from io import StringIO
 
 import streamlit as st
 import pandas as pd
+import altair as alt
 
 from scrapers.odds_api import get_todays_games, get_all_props, get_events_for_date
 from scrapers.nba import get_current_season_stats, get_player_positions
@@ -158,6 +159,57 @@ def show_table(df: pd.DataFrame, key: str):
         st.rerun()
 
 
+def make_last_n_chart(last_games: list[dict], stat_key: str, stat_label: str, line: float | None, n: int = 10):
+    """Build a bar chart of a player's last N games for one stat, with a prop line overlay.
+
+    Bars are green if the stat > line, blue if <= line.
+    """
+    if not last_games:
+        return None
+    # last_games is most-recent-first; take N most recent then reverse for chronological order
+    recent = list(reversed(last_games[:n]))
+    df = pd.DataFrame(recent)
+    df["game_num"] = range(1, len(df) + 1)
+    df["label"] = df.apply(lambda r: f"{r['date']}\nvs {r['opponent']}", axis=1)
+    if line is not None:
+        df["hit"] = df[stat_key] > line
+
+    bars = alt.Chart(df).mark_bar(size=28).encode(
+        x=alt.X("game_num:O", title=None, axis=alt.Axis(labels=False, ticks=False)),
+        y=alt.Y(f"{stat_key}:Q", title=stat_label),
+        color=(
+            alt.Color(
+                "hit:N",
+                scale=alt.Scale(domain=[True, False], range=["#22c55e", "#3b82f6"]),
+                legend=None,
+            )
+            if line is not None
+            else alt.value("#3b82f6")
+        ),
+        tooltip=[
+            alt.Tooltip("date:N", title="Date"),
+            alt.Tooltip("opponent:N", title="Opp"),
+            alt.Tooltip(f"{stat_key}:Q", title=stat_label),
+        ],
+    )
+
+    layers = [bars]
+    if line is not None:
+        line_df = pd.DataFrame({"line": [line]})
+        rule = alt.Chart(line_df).mark_rule(
+            color="white", strokeDash=[6, 4], size=2
+        ).encode(y="line:Q")
+        label = alt.Chart(line_df).mark_text(
+            align="left", baseline="middle", dx=5, color="white"
+        ).encode(y="line:Q", text=alt.value(f"Line: {line}"))
+        layers.extend([rule, label])
+
+    title = f"{stat_label} — Last {len(recent)}"
+    if line is not None:
+        title += f"  (Line: {line})"
+    return alt.layer(*layers).properties(height=220, title=title)
+
+
 def render_player_detail(name: str, summaries: dict, results: dict):
     """Render a detailed view for a single player."""
     summary = summaries.get(name)
@@ -196,6 +248,21 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                     delta=f"{delta:+.1f} vs season avg",
                 )
                 st.caption(f"Season: {s_avg:.1f}  |  Career: {c_avg:.1f}")
+
+    # --- Last 10 games charts ---
+    last_20 = summary.get("last_20", [])
+    if last_20:
+        st.subheader("Last 10 Games")
+        chart_cols = st.columns(3)
+        for i, (stat_key, stat_label, full_stat) in enumerate([
+            ("pts", "Points", "points"),
+            ("reb", "Rebounds", "rebounds"),
+            ("ast", "Assists", "assists"),
+        ]):
+            with chart_cols[i]:
+                chart = make_last_n_chart(last_20, stat_key, stat_label, lines.get(full_stat), n=10)
+                if chart is not None:
+                    st.altair_chart(chart, use_container_width=True)
 
     # --- Averages summary ---
     st.subheader("Averages")
