@@ -115,6 +115,9 @@ def get_player_positions() -> pd.DataFrame:
     df = pd.DataFrame()
     df["name"] = raw["PLAYER_FIRST_NAME"] + " " + raw["PLAYER_LAST_NAME"]
     df["position"] = raw["POSITION"].map(POSITION_MAP).fillna("SF")
+    df["player_id"] = raw["PERSON_ID"].apply(
+        lambda x: int(x) if pd.notna(x) else None
+    )
     df["player_url"] = raw.apply(
         lambda r: f"https://www.nba.com/player/{int(r['PERSON_ID'])}/{r['PLAYER_SLUG']}"
         if pd.notna(r.get("PERSON_ID")) and pd.notna(r.get("PLAYER_SLUG"))

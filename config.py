@@ -51,6 +51,37 @@ NBA_API_TEAM_CODE_MAP = {
     "CHA": "CHH",
 }
 
+# NBA team IDs — used to construct cdn.nba.com logo URLs.
+# These IDs are stable; map our 3-letter codes (NatStat-style: BRK/CHH).
+NBA_TEAM_IDS = {
+    "ATL": 1610612737, "BOS": 1610612738, "BRK": 1610612751,
+    "CHH": 1610612766, "CHI": 1610612741, "CLE": 1610612739,
+    "DAL": 1610612742, "DEN": 1610612743, "DET": 1610612765,
+    "GSW": 1610612744, "HOU": 1610612745, "IND": 1610612754,
+    "LAC": 1610612746, "LAL": 1610612747, "MEM": 1610612763,
+    "MIA": 1610612748, "MIL": 1610612749, "MIN": 1610612750,
+    "NOP": 1610612740, "NYK": 1610612752, "OKC": 1610612760,
+    "ORL": 1610612753, "PHI": 1610612755, "PHX": 1610612756,
+    "POR": 1610612757, "SAC": 1610612758, "SAS": 1610612759,
+    "TOR": 1610612761, "UTA": 1610612762, "WAS": 1610612764,
+}
+
+
+def team_logo_url(team_code: str) -> str:
+    """Return the NBA.com primary logo URL for a 3-letter team code, or '' if unknown."""
+    team_id = NBA_TEAM_IDS.get(team_code)
+    if not team_id:
+        return ""
+    return f"https://cdn.nba.com/logos/nba/{team_id}/global/L/logo.svg"
+
+
+def player_photo_url(player_id: int | str) -> str:
+    """Return the NBA.com headshot URL (1040x760) for a player ID."""
+    if not player_id:
+        return ""
+    return f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
+
+
 # The Odds API full team names → 3-letter codes
 TEAM_NAME_TO_CODE = {
     "Atlanta Hawks": "ATL",

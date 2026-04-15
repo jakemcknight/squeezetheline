@@ -385,7 +385,10 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False):
     props = prepare_props(analysis_props)
     defense = get_defense_by_position()
 
-    player_urls = positions[["name", "player_url"]].drop_duplicates(subset="name")
+    player_meta = positions[["name", "player_url", "player_id"]].drop_duplicates(subset="name")
+    # Keep this name for backward-compat; downstream code merges on it
+    player_urls = player_meta[["name", "player_url"]]
+    player_id_map = dict(zip(player_meta["name"], player_meta["player_id"]))
 
     # Injury report from ESPN
     injuries = get_injury_report()
@@ -438,6 +441,12 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False):
     # Build per-player summaries for the detail view
     all_players = sorted(set(props["name"].dropna().unique()))
     summaries = build_player_summaries(all_players, df, props, todays_games=todays_games)
+
+    # Attach the NBA player_id (used to build the headshot URL)
+    for name, summary in summaries.items():
+        pid = player_id_map.get(name)
+        if pid is not None:
+            summary["player_id"] = int(pid)
 
     # Attach injury info (if any) onto each summary
     if not injuries.empty:
@@ -693,8 +702,42 @@ def render_player_detail(name: str, summaries: dict, results: dict):
 
     team = summary.get("team", "")
     pos = summary.get("position", "")
-    st.title(name)
-    st.caption(f"{team}  |  {pos}")
+    player_id = summary.get("player_id")
+
+    # Find tonight's opponent for this player from any results df
+    opponent_code = ""
+    for result_df in results.values():
+        if not result_df.empty:
+            row = result_df[result_df["name"] == name]
+            if not row.empty:
+                opponent_code = row.iloc[0].get("opponent", "") or ""
+                break
+
+    from config import team_logo_url, player_photo_url
+    photo = player_photo_url(player_id) if player_id else ""
+    team_logo = team_logo_url(team)
+    opp_logo = team_logo_url(opponent_code) if opponent_code else ""
+
+    # Hero header: player photo on left, name + team-vs-opp on right
+    hero_l, hero_r = st.columns([1, 3], gap="medium")
+    with hero_l:
+        if photo:
+            st.image(photo, width=180)
+    with hero_r:
+        st.title(name)
+        # Team vs opponent row with logos
+        matchup_html = "<div style='display:flex;align-items:center;gap:10px;margin-top:-6px;'>"
+        if team_logo:
+            matchup_html += f"<img src='{team_logo}' style='height:36px;width:36px;'>"
+        matchup_html += f"<span style='font-weight:600;font-size:1.05rem;'>{team}</span>"
+        if opponent_code:
+            matchup_html += "<span style='color:#8b92a5;margin:0 4px;'>vs</span>"
+            if opp_logo:
+                matchup_html += f"<img src='{opp_logo}' style='height:36px;width:36px;'>"
+            matchup_html += f"<span style='font-weight:600;font-size:1.05rem;'>{opponent_code}</span>"
+        matchup_html += f"<span style='color:#8b92a5;margin-left:14px;'>· {pos}</span>"
+        matchup_html += "</div>"
+        st.markdown(matchup_html, unsafe_allow_html=True)
 
     # Game status banner (pregame / live / completed) for this player
     # Pull from the first available results dataframe
