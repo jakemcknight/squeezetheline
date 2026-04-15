@@ -224,11 +224,30 @@ def render_auth_gate() -> bool:
             unsafe_allow_html=True,
         )
 
-        tab_in, tab_up = st.tabs(["Sign in", "Sign up"])
+        # Show a success banner if the user just signed up
+        just_signed_up = st.session_state.pop("just_signed_up", None)
+        if just_signed_up:
+            st.success(
+                f"Account created for **{just_signed_up}**! "
+                "Check your email and click the confirmation link, then sign in below."
+            )
 
-        with tab_in:
+        # Use radio (which is stateful) for the tab so we can flip to Sign in after signup
+        if "auth_mode" not in st.session_state:
+            st.session_state["auth_mode"] = "Sign in"
+        mode = st.radio(
+            "auth_mode_radio",
+            ["Sign in", "Sign up"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="auth_mode",
+        )
+
+        if mode == "Sign in":
             with st.form("signin_form", clear_on_submit=False):
-                email = st.text_input("Email", key="signin_email")
+                # Pre-fill the email if they just signed up
+                default_email = just_signed_up or st.session_state.get("signin_email", "")
+                email = st.text_input("Email", value=default_email, key="signin_email")
                 pwd = st.text_input("Password", type="password", key="signin_pwd")
                 submitted = st.form_submit_button("Sign in", use_container_width=True, type="primary")
             if submitted:
@@ -240,8 +259,7 @@ def render_auth_gate() -> bool:
                         st.rerun()
                     else:
                         st.error(msg)
-
-        with tab_up:
+        else:  # Sign up
             with st.form("signup_form", clear_on_submit=False):
                 email = st.text_input("Email", key="signup_email")
                 pwd = st.text_input("Password (8+ chars)", type="password", key="signup_pwd")
@@ -257,7 +275,10 @@ def render_auth_gate() -> bool:
                 else:
                     ok, msg = auth_sign_up(email.strip(), pwd)
                     if ok:
-                        st.success(msg)
+                        # Stash the email and flip to the Sign in tab on next render
+                        st.session_state["just_signed_up"] = email.strip()
+                        st.session_state["auth_mode"] = "Sign in"
+                        st.rerun()
                     else:
                         st.error(msg)
     return False
