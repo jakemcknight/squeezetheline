@@ -179,27 +179,36 @@ st.markdown(
 )
 
 
-# --- Password gate ---
-def check_password() -> bool:
-    """Returns True once the user enters the correct password."""
-    expected = os.environ.get("APP_PASSWORD")
-    if not expected:
-        # Fall back to Streamlit secrets when running on Streamlit Cloud
-        try:
-            expected = st.secrets["APP_PASSWORD"]
-        except Exception:
-            expected = "juice"  # local development default
+# --- Auth gate (Supabase) ---
+from auth import (
+    sign_in as auth_sign_in,
+    sign_up as auth_sign_up,
+    is_authenticated,
+    is_admin,
+    current_user,
+    sign_out as auth_sign_out,
+    get_supabase,
+)
 
-    if st.session_state.get("authenticated"):
+
+def render_auth_gate() -> bool:
+    """Returns True once the user is signed in. Otherwise renders the
+    sign-in / sign-up form and returns False."""
+    if is_authenticated():
         return True
 
-    # Center the password gate
+    if get_supabase() is None:
+        st.error(
+            "Auth is not configured. The site admin needs to set "
+            "`SUPABASE_URL` and `SUPABASE_ANON_KEY` in Streamlit secrets."
+        )
+        st.stop()
+
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
         st.write("")
         st.write("")
         if os.path.exists(LOGO_PATH):
-            # st.image centers better when wrapped in an inner column trio
             _, logo_mid, _ = st.columns([1, 2, 1])
             with logo_mid:
                 st.image(LOGO_PATH, use_container_width=True)
@@ -211,22 +220,47 @@ def check_password() -> bool:
             """,
             unsafe_allow_html=True,
         )
-        pwd = st.text_input(
-            "Password",
-            type="password",
-            label_visibility="collapsed",
-            placeholder="Password",
-        )
-        if pwd:
-            if pwd == expected:
-                st.session_state["authenticated"] = True
-                st.rerun()
-            else:
-                st.error("Wrong password.")
+
+        tab_in, tab_up = st.tabs(["Sign in", "Sign up"])
+
+        with tab_in:
+            with st.form("signin_form", clear_on_submit=False):
+                email = st.text_input("Email", key="signin_email")
+                pwd = st.text_input("Password", type="password", key="signin_pwd")
+                submitted = st.form_submit_button("Sign in", use_container_width=True, type="primary")
+            if submitted:
+                if not email or not pwd:
+                    st.error("Email and password required.")
+                else:
+                    ok, msg = auth_sign_in(email.strip(), pwd)
+                    if ok:
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+        with tab_up:
+            with st.form("signup_form", clear_on_submit=False):
+                email = st.text_input("Email", key="signup_email")
+                pwd = st.text_input("Password (8+ chars)", type="password", key="signup_pwd")
+                pwd2 = st.text_input("Confirm password", type="password", key="signup_pwd2")
+                submitted = st.form_submit_button("Create account", use_container_width=True, type="primary")
+            if submitted:
+                if not email or not pwd:
+                    st.error("Email and password required.")
+                elif len(pwd) < 8:
+                    st.error("Password must be at least 8 characters.")
+                elif pwd != pwd2:
+                    st.error("Passwords don't match.")
+                else:
+                    ok, msg = auth_sign_up(email.strip(), pwd)
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
     return False
 
 
-if not check_password():
+if not render_auth_gate():
     st.stop()
 
 STAT_CONFIGS = [
@@ -938,6 +972,21 @@ with header_col:
         )
 
 with st.sidebar:
+    # --- User info + sign out ---
+    user = current_user()
+    if user:
+        admin_badge = "  · ADMIN" if is_admin() else ""
+        st.markdown(
+            f"<div style='color:#8b92a5;font-size:0.8rem;margin-bottom:4px;'>"
+            f"Signed in as<br/><strong style='color:#e6edf3;font-size:0.9rem;'>{user['email']}</strong>"
+            f"<span style='color:#22c55e;font-weight:700;'>{admin_badge}</span></div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("Sign out", use_container_width=True):
+            auth_sign_out()
+            st.rerun()
+        st.divider()
+
     selected_date = st.date_input("Game Date", value=datetime.date.today())
     st.session_state["selected_date"] = selected_date
 
@@ -965,24 +1014,28 @@ with st.sidebar:
     else:
         st.warning(f"No data for {selected_date} yet.")
 
-    if st.button("Fetch / Refresh Data", type="primary", use_container_width=True):
-        with st.spinner("Fetching from NBA.com + The Odds API..."):
-            shop = st.session_state.get("line_shopping", False)
-            events, results, summaries = fetch_fresh_data(selected_date, all_books=shop)
-            save_daily_results(events, results, summaries, selected_date)
-            st.cache_data.clear()
-            st.session_state.pop("selected_player", None)
-        st.rerun()
+    if is_admin():
+        if st.button("Fetch / Refresh Data", type="primary", use_container_width=True):
+            with st.spinner("Fetching from NBA.com + The Odds API..."):
+                shop = st.session_state.get("line_shopping", False)
+                events, results, summaries = fetch_fresh_data(selected_date, all_books=shop)
+                save_daily_results(events, results, summaries, selected_date)
+                st.cache_data.clear()
+                st.session_state.pop("selected_player", None)
+            st.rerun()
+    else:
+        st.caption("Only admins can refresh data. Reach out to the site owner to be granted access.")
 
-    # Optional line shopping (multi-book) — costs more API credits per book per market
-    line_shopping = st.checkbox(
-        "Enable line shopping (all books)",
-        value=st.session_state.get("line_shopping", False),
-        help="Pulls lines from every US sportsbook (DK, FD, MGM, Caesars, etc.) instead "
-             "of just DraftKings. Player detail page will show the best line per book. "
-             "Uses ~5x more Odds API credits per refresh.",
-    )
-    st.session_state["line_shopping"] = line_shopping
+    # Optional line shopping (multi-book) — admin only since it costs API credits
+    if is_admin():
+        line_shopping = st.checkbox(
+            "Enable line shopping (all books)",
+            value=st.session_state.get("line_shopping", False),
+            help="Pulls lines from every US sportsbook (DK, FD, MGM, Caesars, etc.) instead "
+                 "of just DraftKings. Player detail page will show the best line per book. "
+                 "Uses ~5x more Odds API credits per refresh.",
+        )
+        st.session_state["line_shopping"] = line_shopping
 
     # Optional pick tracking
     pick_tracking = st.checkbox(
@@ -1000,7 +1053,7 @@ with st.sidebar:
 
     # Show a backfill prompt only when no historical data (compressed or raw) exists
     from data import HISTORICAL_DATA_PATH, HISTORICAL_DATA_GZ_PATH
-    if not os.path.exists(HISTORICAL_DATA_PATH) and not os.path.exists(HISTORICAL_DATA_GZ_PATH):
+    if is_admin() and not os.path.exists(HISTORICAL_DATA_PATH) and not os.path.exists(HISTORICAL_DATA_GZ_PATH):
         st.divider()
         st.warning("Historical data is missing. Career averages and historical hit% will be unavailable until backfilled.")
         if st.button("Run Historical Backfill", use_container_width=True):
@@ -1011,7 +1064,10 @@ with st.sidebar:
             st.rerun()
 
 if cached is None:
-    st.info("No data for this date. Click **Fetch / Refresh Data** in the sidebar.")
+    if is_admin():
+        st.info("No data for this date. Click **Fetch / Refresh Data** in the sidebar.")
+    else:
+        st.info("No data for this date yet. Check back later — an admin needs to refresh first.")
     st.stop()
 
 events, results, summaries = cached
