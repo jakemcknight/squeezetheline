@@ -406,10 +406,11 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False):
         for col in ("status_short", "comment"):
             if col in result.columns:
                 result[col] = result[col].fillna("")
-        # Tag each row with its game's status (pregame / live / completed)
-        status_info = result["team-code"].apply(_classify).apply(pd.Series)
-        result["game_status"] = status_info["game_status"]
-        result["tipoff"] = status_info["tipoff"]
+        # Tag each row with its game's status (pregame / live / completed).
+        # Classify once per team then map onto the column, which is pandas 3.x safe.
+        classifications = {t: _classify(t) for t in result["team-code"].unique()}
+        result["game_status"] = result["team-code"].map(lambda t: classifications.get(t, {}).get("game_status", "unknown"))
+        result["tipoff"] = result["team-code"].map(lambda t: classifications.get(t, {}).get("tipoff", ""))
         results[stat] = result
 
     # Build per-player summaries for the detail view
