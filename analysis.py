@@ -189,6 +189,16 @@ def analyze_stat(
     else:
         stat_props["history_hit%"] = None
 
+    # --- Last-10 sparkline data: list of stat values most recent → oldest ---
+    last10_lookup = (
+        df[df["rank"] <= 10]
+        .sort_values(["name", "rank"])
+        .groupby("name")[stat]
+        .apply(list)
+        .to_dict()
+    )
+    stat_props["last10"] = stat_props["name"].map(last10_lookup)
+
     # --- Trend indicator: is the last-5 avg above or below the last-10 avg? ---
     stat_props["trend"] = stat_props.apply(
         lambda r: (

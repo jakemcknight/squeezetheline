@@ -233,7 +233,7 @@ STAT_CONFIGS = [
 ]
 
 DISPLAY_COLS = [
-    "name", "trend", "status_short", "starter", "player_url", "team-code", "opponent", "position", "spread",
+    "name", "trend", "last10", "status_short", "starter", "player_url", "team-code", "opponent", "position", "spread",
     "delta", "delta_5g", "delta_10g",
     "hit%", "history_hit%",
     "vs_opp_season", "vs_opp_career",
@@ -350,6 +350,7 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False):
 COLUMN_CONFIG = {
     "name": st.column_config.TextColumn("Player"),
     "trend": st.column_config.TextColumn("Trend", help="↑ last-5 avg > last-10 avg (trending up), ↓ trending down, → flat"),
+    "last10": st.column_config.BarChartColumn("Last 10", help="Stat values across the player's last 10 games (most recent on right)"),
     "status_short": st.column_config.TextColumn("Inj", help="Injury status (OUT/DBT/Q/DTD/PROB)"),
     "starter": st.column_config.CheckboxColumn("Starter", help="Top 5 mpg on team in last 10 games"),
     "player_url": st.column_config.LinkColumn("Profile", display_text="NBA.com"),
