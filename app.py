@@ -1138,15 +1138,7 @@ with st.sidebar:
     )
     st.session_state["pick_tracking"] = pick_tracking
 
-    if pick_tracking:
-        if st.button("View My Picks", use_container_width=True):
-            st.session_state["view_picks"] = True
-            st.rerun()
-
-    # Auto picks (always available since they're public/shared in Supabase)
-    if st.button("View Auto Picks", use_container_width=True):
-        st.session_state["view_auto_picks"] = True
-        st.rerun()
+    # Navigation is now in the top nav bar, not the sidebar.
 
     # Show a backfill prompt only when no historical data (compressed or raw) exists
     from data import HISTORICAL_DATA_PATH, HISTORICAL_DATA_GZ_PATH
@@ -1168,6 +1160,33 @@ if cached is None:
     st.stop()
 
 events, results, summaries = cached
+
+# --- Top navigation ---
+nav_options = ["Picks Board", "Auto Picks"]
+if st.session_state.get("pick_tracking"):
+    nav_options.append("My Picks")
+
+# Default to Picks Board on first load
+if "top_nav" not in st.session_state:
+    st.session_state["top_nav"] = "Picks Board"
+# Clamp to a valid option in case "My Picks" was hidden after being active
+if st.session_state["top_nav"] not in nav_options:
+    st.session_state["top_nav"] = "Picks Board"
+
+nav_choice = st.radio(
+    "nav",
+    nav_options,
+    horizontal=True,
+    label_visibility="collapsed",
+    key="top_nav",
+)
+
+# Clear any selected player / view flags when the user changes nav
+if st.session_state.get("_last_nav") != nav_choice:
+    st.session_state["_last_nav"] = nav_choice
+    st.session_state.pop("selected_player", None)
+
+st.divider()
 
 # --- Game status banner ---
 # Use the first stat's results for the count (game_status is per-row but consistent per team)
@@ -1193,11 +1212,7 @@ if "game_status" in _first_result.columns and not _first_result.empty:
             st.info(banner)
 
 # --- My Picks view ---
-if st.session_state.get("view_picks") and st.session_state.get("pick_tracking"):
-    if st.button("Back to picks board"):
-        st.session_state["view_picks"] = False
-        st.rerun()
-
+if nav_choice == "My Picks" and st.session_state.get("pick_tracking"):
     st.title("My Picks")
 
     # Auto-grade pending picks against the historical data we already have
@@ -1238,11 +1253,7 @@ if st.session_state.get("view_picks") and st.session_state.get("pick_tracking"):
 
 
 # --- Auto Picks view ---
-if st.session_state.get("view_auto_picks"):
-    if st.button("Back to picks board"):
-        st.session_state["view_auto_picks"] = False
-        st.rerun()
-
+if nav_choice == "Auto Picks":
     st.title("Auto Picks")
     st.caption("Strong Overs and Strong Unders generated automatically every morning.")
 
