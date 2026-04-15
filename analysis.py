@@ -37,6 +37,17 @@ def compute_starters(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
     return mpg[["name", "starter", "mpg_recent"]]
 
 
+def compute_team_last_games(df: pd.DataFrame) -> pd.DataFrame:
+    """Return each team's most recent game date based on the current-season player logs."""
+    if df.empty or "team-code" not in df.columns:
+        return pd.DataFrame(columns=["team-code", "team_last_game"])
+    return (
+        df.sort_values("gameday", ascending=False)
+        .drop_duplicates("team-code")[["team-code", "gameday"]]
+        .rename(columns={"gameday": "team_last_game"})
+    )
+
+
 def compute_rest_days(df: pd.DataFrame, game_date: datetime.date) -> pd.DataFrame:
     """For each player, compute days of rest between their last game and `game_date`.
 
@@ -178,6 +189,18 @@ def analyze_stat(
     else:
         stat_props["history_hit%"] = None
 
+    # --- Trend indicator: is the last-5 avg above or below the last-10 avg? ---
+    stat_props["trend"] = stat_props.apply(
+        lambda r: (
+            "↑" if pd.notna(r.get(f"{stat}_5g")) and pd.notna(r.get(f"{stat}_10g"))
+                   and r[f"{stat}_5g"] > r[f"{stat}_10g"]
+            else "↓" if pd.notna(r.get(f"{stat}_5g")) and pd.notna(r.get(f"{stat}_10g"))
+                       and r[f"{stat}_5g"] < r[f"{stat}_10g"]
+            else "→"
+        ),
+        axis=1,
+    )
+
     # --- Performance vs tonight's opponent (season + career) ---
     def _vs_opp_str(row, source_df, has_opponent_col):
         if not has_opponent_col or pd.isna(row.get("opponent")) or not row.get("opponent"):
@@ -213,6 +236,15 @@ def analyze_stat(
     if game_date is not None:
         rest = compute_rest_days(df, game_date)
         stat_props = stat_props.merge(rest, on="name", how="left")
+
+        # Opponent's back-to-back: did their opponent also play yesterday?
+        team_last = compute_team_last_games(df)
+        target = pd.Timestamp(game_date)
+        team_last["team_rest_days"] = (target - team_last["team_last_game"]).dt.days
+        # Map opponent_code -> opponent's rest days
+        opp_rest = team_last.rename(columns={"team-code": "opponent", "team_rest_days": "opp_rest"})
+        stat_props = stat_props.merge(opp_rest[["opponent", "opp_rest"]], on="opponent", how="left")
+        stat_props["opp_b2b"] = stat_props["opp_rest"] == 1
 
     # --- Starter flag (top 5 mpg on team in last 10 games) ---
     starters = compute_starters(df, window=10)
@@ -303,6 +335,20 @@ def build_player_summaries(
                 history_renamed[col] = pd.to_numeric(history_renamed[col], errors="coerce").fillna(0)
         history_renamed["pra"] = history_renamed["points"] + history_renamed["rebounds"] + history_renamed["assists"]
         history_renamed["gameday"] = pd.to_datetime(history_renamed["game_gameday"], errors="coerce")
+
+        # Normalize home/away into a single 'is_home' boolean
+        # NatStat era used 'H'/'V', nba_api era uses 'home'/'away'
+        if "game_loc" in history_renamed.columns:
+            loc = history_renamed["game_loc"].astype(str).str.lower().str.strip()
+            home_marks = {"h", "home"}
+            history_renamed["is_home"] = loc.isin(home_marks)
+            # Where game_loc is missing, derive from team_code vs game_home-code
+            if "game_home-code" in history_renamed.columns:
+                missing = history_renamed["game_loc"].isna()
+                history_renamed.loc[missing, "is_home"] = (
+                    history_renamed.loc[missing, "team"]
+                    == history_renamed.loc[missing, "game_home-code"]
+                )
 
     # Map prop type names to the stat column keys used elsewhere
     prop_to_stat = {
@@ -432,6 +478,40 @@ def build_player_summaries(
                         "blocks": _avg(vs_games, "blocks"),
                     }
 
+        # --- Home/Away splits (career) ---
+        home_avg = None
+        away_avg = None
+        if not history_renamed.empty and "is_home" in history_renamed.columns:
+            player_career = history_renamed[
+                (history_renamed["name"] == name) & (history_renamed["minutes"] != 0)
+            ]
+            home_games = player_career[player_career["is_home"] == True]  # noqa: E712
+            away_games = player_career[player_career["is_home"] == False]  # noqa: E712
+            if len(home_games):
+                home_avg = {
+                    "games": int(len(home_games)),
+                    "minutes": _avg(home_games, "minutes"),
+                    "points": _avg(home_games, "points"),
+                    "rebounds": _avg(home_games, "rebounds"),
+                    "assists": _avg(home_games, "assists"),
+                    "pra": _avg(home_games, "pra"),
+                    "threes": _avg(home_games, "threes"),
+                    "steals": _avg(home_games, "steals"),
+                    "blocks": _avg(home_games, "blocks"),
+                }
+            if len(away_games):
+                away_avg = {
+                    "games": int(len(away_games)),
+                    "minutes": _avg(away_games, "minutes"),
+                    "points": _avg(away_games, "points"),
+                    "rebounds": _avg(away_games, "rebounds"),
+                    "assists": _avg(away_games, "assists"),
+                    "pra": _avg(away_games, "pra"),
+                    "threes": _avg(away_games, "threes"),
+                    "steals": _avg(away_games, "steals"),
+                    "blocks": _avg(away_games, "blocks"),
+                }
+
         summaries[name] = {
             "team": team,
             "position": position,
@@ -441,6 +521,8 @@ def build_player_summaries(
             "last_20": last_20,
             "vs_opponent": vs_opponent,
             "vs_opponent_avg": vs_opponent_avg,
+            "home_avg": home_avg,
+            "away_avg": away_avg,
         }
 
     return summaries

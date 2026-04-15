@@ -233,11 +233,11 @@ STAT_CONFIGS = [
 ]
 
 DISPLAY_COLS = [
-    "name", "status_short", "starter", "player_url", "team-code", "opponent", "position", "spread",
+    "name", "trend", "status_short", "starter", "player_url", "team-code", "opponent", "position", "spread",
     "delta", "delta_5g", "delta_10g",
     "hit%", "history_hit%",
     "vs_opp_season", "vs_opp_career",
-    "rank", "rest_days", "b2b", "std_dev", "spm",
+    "rank", "rest_days", "b2b", "opp_rest", "opp_b2b", "std_dev", "spm",
 ]
 
 CACHE_DIR = os.path.join(DATA_DIR, "daily_cache")
@@ -328,6 +328,7 @@ def fetch_fresh_data(date: datetime.date):
 
 COLUMN_CONFIG = {
     "name": st.column_config.TextColumn("Player"),
+    "trend": st.column_config.TextColumn("Trend", help="↑ last-5 avg > last-10 avg (trending up), ↓ trending down, → flat"),
     "status_short": st.column_config.TextColumn("Inj", help="Injury status (OUT/DBT/Q/DTD/PROB)"),
     "starter": st.column_config.CheckboxColumn("Starter", help="Top 5 mpg on team in last 10 games"),
     "player_url": st.column_config.LinkColumn("Profile", display_text="NBA.com"),
@@ -344,7 +345,9 @@ COLUMN_CONFIG = {
     "vs_opp_career": st.column_config.TextColumn("vs Opp (Career)", help="Career games beat tonight's line / total career games vs this opponent"),
     "rank": st.column_config.NumberColumn("Def Rank", format="%.0f"),
     "rest_days": st.column_config.NumberColumn("Rest", format="%.0f", help="Days since last game"),
-    "b2b": st.column_config.CheckboxColumn("B2B", help="Back-to-back (played yesterday)"),
+    "b2b": st.column_config.CheckboxColumn("B2B", help="Back-to-back (player played yesterday)"),
+    "opp_rest": st.column_config.NumberColumn("Opp Rest", format="%.0f", help="Days of rest for opponent"),
+    "opp_b2b": st.column_config.CheckboxColumn("Opp B2B", help="Opponent played last night (easier matchup)"),
     "std_dev": st.column_config.NumberColumn("Std Dev", format="%.1f"),
     "spm": st.column_config.NumberColumn("SPM", format="%.2f"),
 }
@@ -594,32 +597,33 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                 if chart is not None:
                     st.altair_chart(chart, use_container_width=True)
 
-    # --- Averages summary ---
+    # --- Averages summary (season, career, home, away) ---
     st.subheader("Averages")
-    avg_df = pd.DataFrame([
-        {
-            "Window": f"This Season ({season_avg.get('games', 0)} games)",
-            "MIN": season_avg.get("minutes", 0),
-            "PTS": season_avg.get("points", 0),
-            "REB": season_avg.get("rebounds", 0),
-            "AST": season_avg.get("assists", 0),
-            "PRA": season_avg.get("pra", 0),
-            "3PM": season_avg.get("threes", 0),
-            "STL": season_avg.get("steals", 0),
-            "BLK": season_avg.get("blocks", 0),
-        },
-        {
-            "Window": f"Career ({career_avg.get('games', 0)} games)",
-            "MIN": career_avg.get("minutes", 0),
-            "PTS": career_avg.get("points", 0),
-            "REB": career_avg.get("rebounds", 0),
-            "AST": career_avg.get("assists", 0),
-            "PRA": career_avg.get("pra", 0),
-            "3PM": career_avg.get("threes", 0),
-            "STL": career_avg.get("steals", 0),
-            "BLK": career_avg.get("blocks", 0),
-        },
-    ])
+    home_avg = summary.get("home_avg")
+    away_avg = summary.get("away_avg")
+
+    def _avg_row(label: str, src: dict | None):
+        if not src:
+            return None
+        return {
+            "Window": label,
+            "MIN": src.get("minutes", 0),
+            "PTS": src.get("points", 0),
+            "REB": src.get("rebounds", 0),
+            "AST": src.get("assists", 0),
+            "PRA": src.get("pra", 0),
+            "3PM": src.get("threes", 0),
+            "STL": src.get("steals", 0),
+            "BLK": src.get("blocks", 0),
+        }
+
+    avg_rows = [
+        _avg_row(f"This Season ({season_avg.get('games', 0)} games)", season_avg),
+        _avg_row(f"Career ({career_avg.get('games', 0)} games)", career_avg),
+        _avg_row(f"Home ({home_avg['games'] if home_avg else 0} games)", home_avg),
+        _avg_row(f"Away ({away_avg['games'] if away_avg else 0} games)", away_avg),
+    ]
+    avg_df = pd.DataFrame([r for r in avg_rows if r is not None])
     _, avg_mid, _ = st.columns([1, 6, 1])
     with avg_mid:
         st.dataframe(
@@ -1012,6 +1016,12 @@ with st.sidebar:
 
     min_spread = st.number_input("Min spread", value=0.0, step=0.5)
 
+    include_inactive = st.checkbox(
+        "Include OUT / Doubtful players",
+        value=False,
+        help="Ruled-out and doubtful players are hidden by default — they skew picks since they won't play.",
+    )
+
 # --- Apply filters ---
 filtered = result.copy()
 if selected_teams:
@@ -1023,6 +1033,11 @@ filtered = filtered[
     & (filtered["hit%"] <= max_hit)
     & (filtered["spread"] >= min_spread)
 ]
+
+# Auto-hide OUT / Doubtful players unless the user opts in
+if not include_inactive and "status_short" in filtered.columns:
+    inactive_codes = {"OUT", "DBT"}
+    filtered = filtered[~filtered["status_short"].fillna("").isin(inactive_codes)]
 
 # --- Display columns (only show what exists) ---
 show_cols = [c for c in DISPLAY_COLS if c in filtered.columns]
