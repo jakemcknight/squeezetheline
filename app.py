@@ -409,33 +409,68 @@ def show_table(df: pd.DataFrame, key: str):
 def show_cards(df: pd.DataFrame, key: str):
     """Compact card-style list for mobile.
 
-    Each pick is a compact button-row with the player, team vs opp, line,
-    delta chip, and hit%. Tapping anywhere on the card opens the detail.
+    Each pick is a card with a colored left edge (green for over leans, red
+    for under leans), player + status badges, line/hit, big delta indicator,
+    and a tap-friendly View button.
     """
+    INJ_BG = {
+        "OUT": "#ef4444", "DBT": "#f97316", "Q": "#f59e0b",
+        "DTD": "#eab308", "PROB": "#84cc16",
+    }
     for idx, row in df.reset_index(drop=True).iterrows():
         name = row["name"]
         delta = row.get("delta", 0) or 0
-        delta_color = "#22c55e" if delta > 0 else "#ef4444" if delta < 0 else "#8b92a5"
+        edge_color = "#22c55e" if delta > 0 else "#ef4444" if delta < 0 else "#6b7280"
         arrow = "↑" if delta > 0 else "↓" if delta < 0 else "→"
         team = row.get("team-code", "")
         opp = row.get("opponent", "")
         line = row.get("spread", 0)
         hit = row.get("hit%", 0) or 0
+        rest = row.get("rest_days")
+        b2b = bool(row.get("b2b", False))
+        opp_b2b = bool(row.get("opp_b2b", False))
+        starter = bool(row.get("starter", False))
+        trend = row.get("trend", "")
         status = row.get("status_short", "") if isinstance(row.get("status_short", ""), str) else ""
-        inj_html = (
-            f'<span style="background:#ef444422;color:#ef4444;padding:2px 6px;'
-            f'border-radius:4px;font-size:0.7rem;font-weight:700;margin-left:6px;">{status}</span>'
-            if status else ""
-        )
+
+        # Inline badges
+        badges = []
+        if status:
+            color = INJ_BG.get(status, "#8b92a5")
+            badges.append(
+                f'<span style="background:{color}22;color:{color};padding:2px 6px;'
+                f'border-radius:4px;font-size:0.7rem;font-weight:700;">{status}</span>'
+            )
+        if starter:
+            badges.append(
+                '<span style="background:#22c55e22;color:#22c55e;padding:2px 6px;'
+                'border-radius:4px;font-size:0.7rem;font-weight:700;">STARTER</span>'
+            )
+        if b2b:
+            badges.append(
+                '<span style="background:#f9731622;color:#f97316;padding:2px 6px;'
+                'border-radius:4px;font-size:0.7rem;font-weight:700;">B2B</span>'
+            )
+        if opp_b2b:
+            badges.append(
+                '<span style="background:#84cc1622;color:#84cc16;padding:2px 6px;'
+                'border-radius:4px;font-size:0.7rem;font-weight:700;">OPP B2B</span>'
+            )
+        badges_html = " ".join(badges)
+        rest_html = f" · {int(rest)}d rest" if rest is not None and not pd.isna(rest) else ""
+        trend_html = f" {trend}" if trend in ("↑", "↓") else ""
 
         with st.container(border=True):
             c1, c2 = st.columns([3, 1])
             with c1:
                 st.markdown(
                     f"""
-                    <div style="font-weight:700;font-size:1.05rem;">{name}{inj_html}</div>
-                    <div style="color:#8b92a5;font-size:0.85rem;margin-top:2px;">
-                        {team} vs {opp} · Line <strong style="color:#e6edf3;">{line:.1f}</strong> · Hit <strong style="color:#e6edf3;">{hit:.0f}%</strong>
+                    <div style="border-left: 4px solid {edge_color}; padding-left: 10px; margin: -8px 0;">
+                        <div style="font-weight:700;font-size:1.05rem;">{name}{trend_html}</div>
+                        <div style="margin-top:4px;">{badges_html}</div>
+                        <div style="color:#8b92a5;font-size:0.85rem;margin-top:6px;">
+                            {team} vs {opp}{rest_html} · Line <strong style="color:#e6edf3;">{line:.1f}</strong> · Hit <strong style="color:#e6edf3;">{hit:.0f}%</strong>
+                        </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -443,7 +478,7 @@ def show_cards(df: pd.DataFrame, key: str):
             with c2:
                 st.markdown(
                     f"""
-                    <div style="text-align:right;color:{delta_color};font-size:1.4rem;
+                    <div style="text-align:right;color:{edge_color};font-size:1.4rem;
                                 font-weight:700;line-height:1;padding-top:6px;">
                         {arrow} {abs(delta):.1f}
                     </div>
@@ -889,6 +924,102 @@ with st.expander("Today's Games", expanded=False):
     for i, event in enumerate(events):
         with cols[i % len(cols)]:
             st.markdown(f"**{event['away_team']}**  \n@ {event['home_team']}")
+
+
+# --- Top Picks panel ---
+def _composite_score(row, side: str) -> float:
+    """Confidence score for ranking the strongest picks across all stats.
+
+    Combines: avg delta across windows, current hit%, history hit%, and
+    inverse volatility (lower std% gets a small boost).
+    """
+    d = row.get("delta", 0) or 0
+    d5 = row.get("delta_5g", 0) or 0
+    d10 = row.get("delta_10g", 0) or 0
+    avg_delta = (abs(d) + abs(d5) + abs(d10)) / 3
+    hit = row.get("hit%", 0) or 0
+    hist = row.get("history_hit%", 0) or 0
+    if side == "over":
+        # Want positive deltas + hit rates above 50
+        edge = (hit - 50) + (hist - 50)
+    else:
+        edge = (50 - hit) + (50 - hist)
+    return avg_delta * (edge / 10 if edge > 0 else 0)
+
+
+def _gather_top_picks(results: dict, side: str, limit: int = 5) -> pd.DataFrame:
+    """Compose a unified ranking across all stats."""
+    rows = []
+    for stat_key, df in results.items():
+        if df.empty:
+            continue
+        # Apply the strong filter for this side
+        if side == "over":
+            qualifying = df[
+                (df["delta"] > 0) & (df["delta_5g"] > 0) & (df["delta_10g"] > 0)
+                & (df["hit%"] > 50) & (df["history_hit%"] > 50)
+            ]
+        else:
+            qualifying = df[
+                (df["delta"] < 0) & (df["delta_5g"] < 0) & (df["delta_10g"] < 0)
+                & (df["hit%"] < 50) & (df["history_hit%"] < 50)
+            ]
+        # Auto-exclude OUT/Doubtful from top picks regardless of toggle
+        if "status_short" in qualifying.columns:
+            qualifying = qualifying[~qualifying["status_short"].fillna("").isin({"OUT", "DBT"})]
+        if qualifying.empty:
+            continue
+        labelled = qualifying.copy()
+        labelled["stat"] = stat_key
+        labelled["score"] = labelled.apply(lambda r: _composite_score(r, side), axis=1)
+        rows.append(labelled)
+    if not rows:
+        return pd.DataFrame()
+    combined = pd.concat(rows, ignore_index=True)
+    return combined.sort_values("score", ascending=False).head(limit)
+
+
+def _render_top_pick_row(row, side: str):
+    arrow = "OVER" if side == "over" else "UNDER"
+    color = "#22c55e" if side == "over" else "#ef4444"
+    stat_label = {
+        "points": "PTS", "rebounds": "REB", "assists": "AST", "pra": "PRA",
+        "threes": "3PM", "steals": "STL", "blocks": "BLK",
+    }.get(row["stat"], row["stat"].upper())
+    delta = row.get("delta", 0)
+    hit = row.get("hit%", 0)
+    hist = row.get("history_hit%", 0)
+    return (
+        f"<div style='border-left:4px solid {color};padding:6px 10px;background:#1a1d24;"
+        f"border-radius:6px;margin-bottom:6px;'>"
+        f"<div style='font-weight:700;font-size:0.95rem;'>{row['name']} "
+        f"<span style='color:{color};margin-left:4px;'>{arrow} {row['spread']:.1f} {stat_label}</span></div>"
+        f"<div style='color:#8b92a5;font-size:0.78rem;margin-top:2px;'>"
+        f"Δ {delta:+.1f} · Hit {hit:.0f}% · Hist {hist:.0f}% · vs {row.get('opponent', '')}"
+        f"</div></div>"
+    )
+
+
+with st.container():
+    top_overs = _gather_top_picks(results, "over", limit=5)
+    top_unders = _gather_top_picks(results, "under", limit=5)
+    if not top_overs.empty or not top_unders.empty:
+        st.subheader("Today's Top Picks")
+        tp_col1, tp_col2 = st.columns(2)
+        with tp_col1:
+            st.markdown("**Strongest Overs**")
+            if top_overs.empty:
+                st.caption("No strong overs found.")
+            else:
+                for _, r in top_overs.iterrows():
+                    st.markdown(_render_top_pick_row(r, "over"), unsafe_allow_html=True)
+        with tp_col2:
+            st.markdown("**Strongest Unders**")
+            if top_unders.empty:
+                st.caption("No strong unders found.")
+            else:
+                for _, r in top_unders.iterrows():
+                    st.markdown(_render_top_pick_row(r, "under"), unsafe_allow_html=True)
 
 st.divider()
 
