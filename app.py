@@ -1314,6 +1314,39 @@ if nav_choice == "Auto Picks":
     st.title("Auto Picks")
     st.caption("Strong Overs and Strong Unders generated automatically every morning.")
 
+    # Admin-only manual trigger + diagnostic
+    if is_admin():
+        with st.expander("Admin tools"):
+            from auto_runner import maybe_auto_refresh, maybe_auto_grade
+            from auto_picks import get_admin_client
+            import os as _os
+            srv = _os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "")
+            st.write({
+                "service_role_key_present": bool(srv),
+                "last_job_status": st.session_state.get("_last_job_status", "not yet attempted this session"),
+            })
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("Generate today's auto-picks now", use_container_width=True):
+                    # Bypass time check + once-per-session guard
+                    st.session_state.pop("_daily_jobs_attempted", None)
+                    try:
+                        from auto_picks import generate_and_save_picks
+                        with st.spinner("Generating picks..."):
+                            n = generate_and_save_picks(datetime.date.today())
+                        st.success(f"Saved {n} picks.")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+            with col_b:
+                if st.button("Grade pending picks now", use_container_width=True):
+                    try:
+                        from auto_picks import grade_pending_picks
+                        with st.spinner("Grading..."):
+                            n = grade_pending_picks(datetime.date.today())
+                        st.success(f"Graded {n} picks.")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+
     sub = st.radio(
         "auto_picks_subview",
         ["All Strong", "Top 5 Only"],
