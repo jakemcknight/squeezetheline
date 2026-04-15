@@ -1437,6 +1437,50 @@ if nav_choice == "What-If":
             "BLK": float(df["blocks"].mean()) if "blocks" in df.columns else 0,
         }
 
+    # --- Tonight's lines vs the with-teammate-out averages ---
+    # Look up tonight's lines for the eval player from the cached daily results.
+    LINE_STATS = [
+        ("points", "Points", "Total Points"),
+        ("rebounds", "Rebounds", "Total Rebounds"),
+        ("assists", "Assists", "Total Assists"),
+        ("pra", "PRA", "Total PRA"),
+        ("threes", "3PM", "Total 3PM"),
+        ("steals", "Steals", "Total Steals"),
+        ("blocks", "Blocks", "Total Blocks"),
+    ]
+    tonight_lines = {}
+    for stat_key, _, _ in LINE_STATS:
+        if stat_key in results:
+            row = results[stat_key][results[stat_key]["name"] == eval_player]
+            if not row.empty:
+                tonight_lines[stat_key] = float(row.iloc[0]["spread"])
+
+    if tonight_lines:
+        st.subheader(f"Tonight's lines vs. with-{out_player}-out average")
+        active = [(k, lbl) for k, lbl, _ in LINE_STATS if k in tonight_lines]
+        n_cols = min(len(active), 4)
+        cols = st.columns(n_cols)
+        for i, (stat_key, label) in enumerate(active):
+            with cols[i % n_cols]:
+                line = tonight_lines[stat_key]
+                # Average for this stat in the with-out subset
+                if stat_key in eval_games_with_out_player_absent.columns:
+                    out_avg = float(eval_games_with_out_player_absent[stat_key].mean())
+                    delta = out_avg - line
+                    # Hit rate over the filtered games
+                    hits = int((eval_games_with_out_player_absent[stat_key] > line).sum())
+                    hit_pct = (hits / n_out) * 100
+                    st.metric(
+                        label,
+                        f"Line: {line:.1f}",
+                        delta=f"{delta:+.1f} vs avg ({out_avg:.1f})",
+                    )
+                    st.caption(f"Hit {hits}/{n_out} ({hit_pct:.0f}%)")
+                else:
+                    st.metric(label, f"Line: {line:.1f}", delta="no data")
+    else:
+        st.caption(f"No prop lines for {eval_player} on the current slate (or data not refreshed).")
+
     rows = [
         _avg_row("All games (baseline)", eval_games_played),
         _avg_row(f"With {out_player} OUT", eval_games_with_out_player_absent),
