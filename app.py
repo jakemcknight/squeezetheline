@@ -234,20 +234,28 @@ def render_auth_gate() -> bool:
                 "Check your email and click the confirmation link, then sign in below."
             )
 
-        # Use radio (which is stateful) for the tab so we can flip to Sign in after signup
-        if "auth_mode" not in st.session_state:
-            st.session_state["auth_mode"] = "Sign in"
+        # Pick the active tab without writing to a widget's session_state key
+        # (Streamlit forbids modifying a widget's state after it's instantiated.)
+        # The "_force_signin_tab" flag from a successful signup wins this turn,
+        # otherwise we honor whatever the user had selected last.
+        force_signin = st.session_state.pop("_force_signin_tab", False)
+        default_idx = 0  # "Sign in" by default
+        if not force_signin:
+            last_mode = st.session_state.get("_last_auth_mode", "Sign in")
+            default_idx = 0 if last_mode == "Sign in" else 1
+
         mode = st.radio(
             "auth_mode_radio",
             ["Sign in", "Sign up"],
             horizontal=True,
             label_visibility="collapsed",
-            key="auth_mode",
+            index=default_idx,
+            key="auth_mode_widget",
         )
+        st.session_state["_last_auth_mode"] = mode
 
         if mode == "Sign in":
             with st.form("signin_form", clear_on_submit=False):
-                # Pre-fill the email if they just signed up
                 default_email = just_signed_up or st.session_state.get("signin_email", "")
                 email = st.text_input("Email", value=default_email, key="signin_email")
                 pwd = st.text_input("Password", type="password", key="signin_pwd")
@@ -277,9 +285,10 @@ def render_auth_gate() -> bool:
                 else:
                     ok, msg = auth_sign_up(email.strip(), pwd)
                     if ok:
-                        # Stash the email and flip to the Sign in tab on next render
+                        # Use a non-widget key as the signal so we can flip
+                        # the radio's default index on the next render
                         st.session_state["just_signed_up"] = email.strip()
-                        st.session_state["auth_mode"] = "Sign in"
+                        st.session_state["_force_signin_tab"] = True
                         st.rerun()
                     else:
                         st.error(msg)
