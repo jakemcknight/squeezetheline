@@ -51,11 +51,25 @@ def pull_season(season: str) -> pd.DataFrame:
     Returns a DataFrame with columns matching the existing historical_data.csv
     format so old NatStat data and new nba_api data can coexist.
     """
-    log = LeagueGameLog(
-        season=season,
-        season_type_all_star="Regular Season",
-        player_or_team_abbreviation="P",
-    )
+    # NBA.com sometimes times out from cloud IPs (GitHub Actions etc.)
+    # Retry a few times with backoff before giving up.
+    last_err = None
+    for attempt in range(1, 6):
+        try:
+            log = LeagueGameLog(
+                season=season,
+                season_type_all_star="Regular Season",
+                player_or_team_abbreviation="P",
+                timeout=90,
+            )
+            break
+        except Exception as e:
+            last_err = e
+            if attempt == 5:
+                raise
+            wait = 5 * attempt
+            print(f"  nba_api attempt {attempt} failed ({type(e).__name__}); retrying in {wait}s...")
+            time.sleep(wait)
     raw = log.get_data_frames()[0]
 
     df = pd.DataFrame()

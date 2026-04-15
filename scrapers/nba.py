@@ -3,12 +3,37 @@ Fetch current-season player stats from NBA.com via nba_api.
 
 Completely free, no API key needed. Uses LeagueGameLog to pull all player
 game logs for the current season in a single request.
+
+NBA.com is known to flake on cloud IPs (GitHub Actions, AWS, etc.) so
+the calls below use a longer timeout and retry on transient failures.
 """
+
+import time
 
 import pandas as pd
 from nba_api.stats.endpoints import LeagueGameLog, PlayerIndex
 
 from config import SEASON_YEAR, NBA_API_TEAM_CODE_MAP
+
+NBA_TIMEOUT = 90  # seconds — default is 30, which often times out from cloud IPs
+NBA_MAX_RETRIES = 5
+NBA_RETRY_BACKOFF = 5  # seconds (linear: 5, 10, 15, ...)
+
+
+def _with_retries(callable_, *args, **kwargs):
+    """Retry an nba_api call on transient timeouts/connection errors."""
+    last_err = None
+    for attempt in range(1, NBA_MAX_RETRIES + 1):
+        try:
+            return callable_(*args, **kwargs)
+        except Exception as e:
+            last_err = e
+            if attempt == NBA_MAX_RETRIES:
+                break
+            wait = NBA_RETRY_BACKOFF * attempt
+            print(f"  nba_api attempt {attempt} failed ({type(e).__name__}); retrying in {wait}s...")
+            time.sleep(wait)
+    raise last_err
 
 # Map nba_api general positions to the specific positions used by
 # the defense-vs-position data (PG, SG, SF, PF, C)
@@ -47,10 +72,12 @@ def get_current_season_stats() -> pd.DataFrame:
     expects: name, team-code, gameday, minutes, points, rebounds, assists.
     """
     season = f"{SEASON_YEAR - 1}-{str(SEASON_YEAR)[-2:]}"
-    log = LeagueGameLog(
+    log = _with_retries(
+        LeagueGameLog,
         season=season,
         season_type_all_star="Regular Season",
         player_or_team_abbreviation="P",
+        timeout=NBA_TIMEOUT,
     )
     data = log.get_dict()["resultSets"][0]
     raw = pd.DataFrame(data["rowSet"], columns=data["headers"])
@@ -81,7 +108,7 @@ def get_player_positions() -> pd.DataFrame:
     Returns a DataFrame with columns: name, position (PG/SG/SF/PF/C).
     """
     season = f"{SEASON_YEAR - 1}-{str(SEASON_YEAR)[-2:]}"
-    pi = PlayerIndex(season=season)
+    pi = _with_retries(PlayerIndex, season=season, timeout=NBA_TIMEOUT)
     data = pi.get_dict()["resultSets"][0]
     raw = pd.DataFrame(data["rowSet"], columns=data["headers"])
 
