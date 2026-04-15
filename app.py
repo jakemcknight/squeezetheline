@@ -188,6 +188,7 @@ from auth import (
     current_user,
     sign_out as auth_sign_out,
     get_supabase,
+    get_supabase_diagnostic,
 )
 
 
@@ -202,6 +203,8 @@ def render_auth_gate() -> bool:
             "Auth is not configured. The site admin needs to set "
             "`SUPABASE_URL` and `SUPABASE_ANON_KEY` in Streamlit secrets."
         )
+        with st.expander("Diagnostic"):
+            st.json(get_supabase_diagnostic())
         st.stop()
 
     _, mid, _ = st.columns([1, 2, 1])

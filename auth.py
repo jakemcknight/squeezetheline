@@ -29,9 +29,7 @@ def _get_secret(name: str, default: str = "") -> str:
         return default
 
 
-@st.cache_resource
-def get_supabase() -> Optional[Client]:
-    """Build (or reuse) the Supabase client. Cached for the app lifetime."""
+def _build_client() -> Optional[Client]:
     url = _get_secret("SUPABASE_URL")
     key = _get_secret("SUPABASE_ANON_KEY")
     if not url or not key:
@@ -41,6 +39,26 @@ def get_supabase() -> Optional[Client]:
     except Exception as e:
         print(f"Supabase init failed: {e}")
         return None
+
+
+def get_supabase() -> Optional[Client]:
+    """Return a Supabase client, caching it on session state once available."""
+    client = st.session_state.get("_sb_client")
+    if client is None:
+        client = _build_client()
+        if client is not None:
+            st.session_state["_sb_client"] = client
+    return client
+
+
+def get_supabase_diagnostic() -> dict:
+    """For debugging the auth gate — what does Streamlit see?"""
+    return {
+        "SUPABASE_URL_present": bool(_get_secret("SUPABASE_URL")),
+        "SUPABASE_ANON_KEY_present": bool(_get_secret("SUPABASE_ANON_KEY")),
+        "ADMIN_EMAILS_present": bool(_get_secret("ADMIN_EMAILS")),
+        "client_built": _build_client() is not None,
+    }
 
 
 def get_admin_emails() -> list[str]:
