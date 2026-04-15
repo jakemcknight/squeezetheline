@@ -11,6 +11,13 @@ from scrapers.odds_api import get_todays_games, get_all_props, get_events_for_da
 from scrapers.nba import get_current_season_stats, get_player_positions
 from scrapers.basketball_ref import get_defense_by_position
 from scrapers.injuries import get_injury_report
+from picks import (
+    add_pick,
+    remove_pick,
+    load_picks,
+    grade_picks,
+    picks_summary,
+)
 from data import prepare_stats, prepare_props, DATA_DIR
 from analysis import (
     analyze_stat,
@@ -629,6 +636,8 @@ def render_player_detail(name: str, summaries: dict, results: dict):
 
     n_cols = min(len(active_stats), 4)
     cols = st.columns(n_cols)
+    pick_tracking_on = st.session_state.get("pick_tracking", False)
+    pick_date = st.session_state.get("selected_date", datetime.date.today())
     for i, (stat_key, label, _) in enumerate(active_stats):
         with cols[i % n_cols]:
             line = lines.get(stat_key)
@@ -640,6 +649,26 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                 delta = s_avg - line
                 st.metric(label, f"Line: {line}", delta=f"{delta:+.1f} vs season avg")
                 st.caption(f"Season: {s_avg:.1f}  |  Career: {c_avg:.1f}")
+                if pick_tracking_on:
+                    btn_cols = st.columns(2)
+                    with btn_cols[0]:
+                        if st.button(f"Over", key=f"pick_over_{stat_key}", use_container_width=True):
+                            add_pick(
+                                date=pick_date, player=name, stat=stat_key,
+                                line=line, side="over",
+                                team=summary.get("team", ""),
+                                opponent=summary.get("opponent", "") if isinstance(summary.get("opponent", ""), str) else "",
+                            )
+                            st.toast(f"Saved: {name} OVER {line} {label}")
+                    with btn_cols[1]:
+                        if st.button(f"Under", key=f"pick_under_{stat_key}", use_container_width=True):
+                            add_pick(
+                                date=pick_date, player=name, stat=stat_key,
+                                line=line, side="under",
+                                team=summary.get("team", ""),
+                                opponent=summary.get("opponent", "") if isinstance(summary.get("opponent", ""), str) else "",
+                            )
+                            st.toast(f"Saved: {name} UNDER {line} {label}")
 
     # --- Line shopping (when multi-book data is present) ---
     all_books = summary.get("all_books")
@@ -910,6 +939,7 @@ with header_col:
 
 with st.sidebar:
     selected_date = st.date_input("Game Date", value=datetime.date.today())
+    st.session_state["selected_date"] = selected_date
 
 with date_col:
     st.markdown(
@@ -954,6 +984,20 @@ with st.sidebar:
     )
     st.session_state["line_shopping"] = line_shopping
 
+    # Optional pick tracking
+    pick_tracking = st.checkbox(
+        "Enable pick tracking",
+        value=st.session_state.get("pick_tracking", False),
+        help="Save picks you make and auto-grade them after games finish. "
+             "Picks are stored on disk (data/picks.json).",
+    )
+    st.session_state["pick_tracking"] = pick_tracking
+
+    if pick_tracking:
+        if st.button("View My Picks", use_container_width=True):
+            st.session_state["view_picks"] = True
+            st.rerun()
+
     # Show a backfill prompt only when no historical data (compressed or raw) exists
     from data import HISTORICAL_DATA_PATH, HISTORICAL_DATA_GZ_PATH
     if not os.path.exists(HISTORICAL_DATA_PATH) and not os.path.exists(HISTORICAL_DATA_GZ_PATH):
@@ -971,6 +1015,51 @@ if cached is None:
     st.stop()
 
 events, results, summaries = cached
+
+# --- My Picks view ---
+if st.session_state.get("view_picks") and st.session_state.get("pick_tracking"):
+    if st.button("Back to picks board"):
+        st.session_state["view_picks"] = False
+        st.rerun()
+
+    st.title("My Picks")
+
+    # Auto-grade pending picks against the historical data we already have
+    from data import load_historical_data
+    if st.button("Auto-grade pending picks"):
+        graded = grade_picks(load_historical_data())
+        st.success(f"Graded {graded} picks.")
+        st.rerun()
+
+    summary = picks_summary()
+    metric_cols = st.columns(5)
+    metric_cols[0].metric("Total", summary["total"])
+    metric_cols[1].metric("Pending", summary["pending"])
+    metric_cols[2].metric("Won", summary["won"])
+    metric_cols[3].metric("Lost", summary["lost"])
+    metric_cols[4].metric("Win rate", f"{summary['win_rate']:.0f}%")
+
+    picks = load_picks()
+    if not picks:
+        st.info("No picks saved yet. Open a player's detail page and click 'Save pick' to start.")
+    else:
+        picks_df = pd.DataFrame(picks).sort_values("created_at", ascending=False)
+        # Show key columns
+        cols_to_show = ["date", "player", "stat", "side", "line", "actual", "result", "team", "opponent"]
+        cols_to_show = [c for c in cols_to_show if c in picks_df.columns]
+        st.dataframe(picks_df[cols_to_show], use_container_width=True, hide_index=True)
+
+        # Removal UI
+        with st.expander("Remove a pick"):
+            pick_options = {f"{p['player']} {p['side']} {p['line']} {p['stat']} ({p['date']})": p["id"]
+                            for p in picks}
+            choice = st.selectbox("Pick to remove", options=[""] + list(pick_options.keys()))
+            if choice and st.button("Remove", type="secondary"):
+                remove_pick(pick_options[choice])
+                st.rerun()
+
+    st.stop()
+
 
 # --- Player Detail View ---
 if "selected_player" in st.session_state and st.session_state["selected_player"]:

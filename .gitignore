@@ -33,6 +33,7 @@ data/stats.csv
 data/skip_dates.csv
 data/new_data.csv
 data/daily_cache/
+data/picks.json
 
 # OS
 .DS_Store
