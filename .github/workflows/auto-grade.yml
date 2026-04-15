@@ -1,11 +1,10 @@
 name: Auto-grade picks
 
 on:
-  schedule:
-    # 2:00 AM ET = 06:00 UTC (DST) / 07:00 UTC (standard time)
-    # Use 07:00 UTC year-round; runs at 2am ET in winter, 3am in summer — both
-    # late enough to catch every West Coast game's box score.
-    - cron: '0 7 * * *'
+  # NOTE: Cron is intentionally disabled because NBA.com blocks GitHub Actions
+  # IP ranges. The Streamlit app itself runs grading automatically on the first
+  # page load after 2am ET (see auto_runner.py). This workflow remains for
+  # manual triggers if needed.
   workflow_dispatch:
 
 jobs:

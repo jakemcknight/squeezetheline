@@ -19,6 +19,7 @@ from picks import (
     picks_summary,
 )
 from auto_picks import fetch_auto_picks, summarize_picks as auto_summarize_picks
+from auto_runner import run_daily_jobs
 from data import prepare_stats, prepare_props, DATA_DIR
 from analysis import (
     analyze_stat,
@@ -287,6 +288,21 @@ def render_auth_gate() -> bool:
 
 if not render_auth_gate():
     st.stop()
+
+
+# --- Run daily auto-jobs (refresh + grade) once per session ---
+# These are no-ops when conditions aren't met (too early, picks already
+# saved, no service-role key, etc.), so it's safe to call on every load.
+if not st.session_state.get("_daily_jobs_attempted"):
+    st.session_state["_daily_jobs_attempted"] = True
+    with st.spinner("Checking for new auto-picks / pending grades..."):
+        job_status = run_daily_jobs()
+        if job_status["refresh"].get("action") == "ran":
+            st.toast(f"Auto-generated {job_status['refresh'].get('saved', 0)} picks for today.")
+        if job_status["grade"].get("action") == "ran":
+            st.toast(f"Graded {job_status['grade'].get('graded', 0)} pending picks.")
+        # Stash any errors for the admin debug panel
+        st.session_state["_last_job_status"] = job_status
 
 STAT_CONFIGS = [
     ("points", "Total Points"),

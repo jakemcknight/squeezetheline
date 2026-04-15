@@ -1,11 +1,11 @@
 name: Auto-refresh picks
 
 on:
-  schedule:
-    # 10:00 AM ET = 14:00 UTC (DST) / 15:00 UTC (standard time)
-    # Use 15:00 UTC year-round; DST will mean 11am ET in summer, fine for our purposes
-    - cron: '0 15 * * *'
-  workflow_dispatch:  # allow manual runs from the Actions tab
+  # NOTE: Cron is intentionally disabled because NBA.com blocks GitHub Actions
+  # IP ranges. The Streamlit app itself runs the daily refresh automatically
+  # on the first page load after 10am ET (see auto_runner.py). This workflow
+  # remains for manual triggers in case GHA IPs are unblocked in the future.
+  workflow_dispatch:
 
 jobs:
   refresh:
