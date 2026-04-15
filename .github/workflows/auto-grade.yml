@@ -1,0 +1,31 @@
+name: Auto-grade picks
+
+on:
+  schedule:
+    # 2:00 AM ET = 06:00 UTC (DST) / 07:00 UTC (standard time)
+    # Use 07:00 UTC year-round; runs at 2am ET in winter, 3am in summer — both
+    # late enough to catch every West Coast game's box score.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+jobs:
+  grade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run auto grade
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python auto_grade.py

@@ -18,6 +18,7 @@ from picks import (
     grade_picks,
     picks_summary,
 )
+from auto_picks import fetch_auto_picks, summarize_picks as auto_summarize_picks
 from data import prepare_stats, prepare_props, DATA_DIR
 from analysis import (
     analyze_stat,
@@ -1126,6 +1127,11 @@ with st.sidebar:
             st.session_state["view_picks"] = True
             st.rerun()
 
+    # Auto picks (always available since they're public/shared in Supabase)
+    if st.button("View Auto Picks", use_container_width=True):
+        st.session_state["view_auto_picks"] = True
+        st.rerun()
+
     # Show a backfill prompt only when no historical data (compressed or raw) exists
     from data import HISTORICAL_DATA_PATH, HISTORICAL_DATA_GZ_PATH
     if is_admin() and not os.path.exists(HISTORICAL_DATA_PATH) and not os.path.exists(HISTORICAL_DATA_GZ_PATH):
@@ -1212,6 +1218,63 @@ if st.session_state.get("view_picks") and st.session_state.get("pick_tracking"):
                 remove_pick(pick_options[choice])
                 st.rerun()
 
+    st.stop()
+
+
+# --- Auto Picks view ---
+if st.session_state.get("view_auto_picks"):
+    if st.button("Back to picks board"):
+        st.session_state["view_auto_picks"] = False
+        st.rerun()
+
+    st.title("Auto Picks")
+    st.caption("Strong Overs and Strong Unders generated automatically every morning.")
+
+    sub = st.radio(
+        "auto_picks_subview",
+        ["All Strong", "Top 5 Only"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="auto_picks_subview_radio",
+    )
+    top_only = sub == "Top 5 Only"
+
+    auto_picks = fetch_auto_picks(top_only=top_only)
+    if not auto_picks:
+        st.info(
+            "No auto picks yet. The first batch will be saved at 10am ET tomorrow "
+            "(or run the workflow manually from GitHub Actions)."
+        )
+        st.stop()
+
+    summary = auto_summarize_picks(auto_picks)
+    m = st.columns(5)
+    m[0].metric("Total", summary["total"])
+    m[1].metric("Pending", summary["pending"])
+    m[2].metric("Won", summary["won"])
+    m[3].metric("Lost", summary["lost"])
+    m[4].metric("Win rate", f"{summary['win_rate']:.0f}%")
+
+    df = pd.DataFrame(auto_picks)
+    cols_to_show = [
+        "date", "player", "stat", "side", "line", "actual", "result",
+        "team", "opponent", "delta", "hit_pct", "history_hit_pct", "score", "is_top_pick",
+    ]
+    cols_to_show = [c for c in cols_to_show if c in df.columns]
+    st.dataframe(
+        df[cols_to_show],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "line": st.column_config.NumberColumn("Line", format="%.1f"),
+            "actual": st.column_config.NumberColumn("Actual", format="%.0f"),
+            "delta": st.column_config.NumberColumn("Delta", format="%+.1f"),
+            "hit_pct": st.column_config.NumberColumn("Hit %", format="%.0f%%"),
+            "history_hit_pct": st.column_config.NumberColumn("Hist Hit %", format="%.0f%%"),
+            "score": st.column_config.NumberColumn("Score", format="%.1f"),
+            "is_top_pick": st.column_config.CheckboxColumn("Top 5", help="In the top 5 of its side that day"),
+        },
+    )
     st.stop()
 
 
