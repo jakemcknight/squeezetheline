@@ -1229,7 +1229,7 @@ if cached is None:
 events, results, summaries = cached
 
 # --- Top navigation ---
-nav_options = ["Picks Board", "Auto Picks"]
+nav_options = ["Picks Board", "Auto Picks", "What-If"]
 if st.session_state.get("pick_tracking"):
     nav_options.append("My Picks")
 
@@ -1320,6 +1320,165 @@ if nav_choice == "My Picks" and st.session_state.get("pick_tracking"):
 
 
 # --- Auto Picks view ---
+if nav_choice == "What-If":
+    st.title("What-If: Player out impact")
+    st.caption(
+        "How does a player perform when a specific teammate is out? "
+        "Filters the evaluated player's games to only those where the "
+        "selected 'out' player didn't play (0 minutes or absent from box score)."
+    )
+
+    from data import load_historical_data
+    history = load_historical_data()
+    if history.empty:
+        st.error("No historical data available.")
+        st.stop()
+
+    # Normalize columns once
+    hist = history.rename(columns={
+        "player": "name", "team_code": "team", "opponent_code": "opponent",
+        "pts": "points", "reb": "rebounds", "ast": "assists", "min": "minutes",
+        "threefm": "threes", "stl": "steals", "blk": "blocks",
+    })
+    for col in ("points", "rebounds", "assists", "minutes", "threes", "steals", "blocks"):
+        if col in hist.columns:
+            hist[col] = pd.to_numeric(hist[col], errors="coerce").fillna(0)
+    hist["pra"] = hist["points"] + hist["rebounds"] + hist["assists"]
+    hist["gameday"] = pd.to_datetime(hist.get("game_gameday", hist.get("date_string")), errors="coerce")
+    hist = hist[hist["name"].notna()]
+
+    # Build team rosters from current-season data so selectors only show
+    # active players (not retired guys who happen to be in the historical CSV).
+    season_only = hist[hist["gameday"] >= pd.Timestamp("2024-10-01")]
+    rosters = (
+        season_only.groupby("team")["name"]
+        .agg(lambda s: sorted(set(s.dropna())))
+        .to_dict()
+    )
+    teams_list = sorted(rosters.keys())
+
+    if not teams_list:
+        st.warning("No team data available.")
+        st.stop()
+
+    # --- Selectors ---
+    sel_team = st.selectbox("Team", options=teams_list, index=0, key="whatif_team")
+    roster = rosters.get(sel_team, [])
+    if len(roster) < 2:
+        st.warning(f"Need at least 2 players on {sel_team}.")
+        st.stop()
+
+    c1, c2 = st.columns(2)
+    with c1:
+        eval_player = st.selectbox("Player to evaluate", options=roster, key="whatif_eval")
+    with c2:
+        out_options = [p for p in roster if p != eval_player]
+        out_player = st.selectbox("Player who is OUT", options=out_options, key="whatif_out")
+
+    period = st.radio(
+        "Period",
+        ["This season only", "Career (all years)"],
+        horizontal=True,
+        key="whatif_period",
+    )
+
+    # --- Compute ---
+    if period == "This season only":
+        eval_games_all = hist[(hist["name"] == eval_player) & (hist["team"] == sel_team) & (hist["gameday"] >= pd.Timestamp("2024-10-01"))]
+        out_games_all = hist[(hist["name"] == out_player) & (hist["gameday"] >= pd.Timestamp("2024-10-01"))]
+    else:
+        eval_games_all = hist[(hist["name"] == eval_player) & (hist["team"] == sel_team)]
+        out_games_all = hist[(hist["name"] == out_player)]
+
+    # Dates the OUT player actually played (positive minutes)
+    out_player_played_dates = set(
+        out_games_all[out_games_all["minutes"] > 0]["gameday"].dropna()
+    )
+
+    # Eval player's games where the out player did NOT play
+    eval_games_with_out_player_absent = eval_games_all[
+        ~eval_games_all["gameday"].isin(out_player_played_dates) & (eval_games_all["minutes"] > 0)
+    ].sort_values("gameday", ascending=False)
+
+    eval_games_played = eval_games_all[eval_games_all["minutes"] > 0]
+
+    # --- Render results ---
+    st.divider()
+
+    n_total = len(eval_games_played)
+    n_out = len(eval_games_with_out_player_absent)
+    if n_total == 0:
+        st.warning(f"{eval_player} has no games on {sel_team} in this period.")
+        st.stop()
+
+    sample_pct = (n_out / n_total) * 100 if n_total else 0
+    sm1, sm2 = st.columns(2)
+    sm1.metric(f"Games played by {eval_player}", n_total)
+    sm2.metric(f"Of those, with {out_player} OUT", f"{n_out}", delta=f"{sample_pct:.0f}% of sample")
+
+    if n_out == 0:
+        st.info(f"No games found where {eval_player} played but {out_player} didn't. Try Career view or a different teammate.")
+        st.stop()
+
+    # Side-by-side averages
+    def _avg_row(label, df):
+        if df.empty:
+            return None
+        return {
+            "Sample": label,
+            "Games": int(len(df)),
+            "MIN": float(df["minutes"].mean()),
+            "PTS": float(df["points"].mean()),
+            "REB": float(df["rebounds"].mean()),
+            "AST": float(df["assists"].mean()),
+            "PRA": float(df["pra"].mean()),
+            "3PM": float(df["threes"].mean()) if "threes" in df.columns else 0,
+            "STL": float(df["steals"].mean()) if "steals" in df.columns else 0,
+            "BLK": float(df["blocks"].mean()) if "blocks" in df.columns else 0,
+        }
+
+    rows = [
+        _avg_row("All games (baseline)", eval_games_played),
+        _avg_row(f"With {out_player} OUT", eval_games_with_out_player_absent),
+    ]
+    avg_df = pd.DataFrame([r for r in rows if r is not None])
+
+    st.subheader("Averages comparison")
+    st.dataframe(avg_df, use_container_width=True, hide_index=True, column_config={
+        "MIN": st.column_config.NumberColumn(format="%.1f"),
+        "PTS": st.column_config.NumberColumn(format="%.1f"),
+        "REB": st.column_config.NumberColumn(format="%.1f"),
+        "AST": st.column_config.NumberColumn(format="%.1f"),
+        "PRA": st.column_config.NumberColumn(format="%.1f"),
+        "3PM": st.column_config.NumberColumn(format="%.1f"),
+        "STL": st.column_config.NumberColumn(format="%.1f"),
+        "BLK": st.column_config.NumberColumn(format="%.1f"),
+    })
+
+    # Specific game log
+    st.subheader(f"Games where {out_player} was out ({n_out} most recent first)")
+    log_df = eval_games_with_out_player_absent.head(30).copy()
+    log_df["date"] = log_df["gameday"].dt.strftime("%Y-%m-%d")
+    log_cols = ["date", "opponent", "minutes", "points", "rebounds", "assists", "threes", "steals", "blocks"]
+    log_cols = [c for c in log_cols if c in log_df.columns]
+    log_df = log_df[log_cols].rename(columns={
+        "date": "Date", "opponent": "Opp", "minutes": "MIN",
+        "points": "PTS", "rebounds": "REB", "assists": "AST",
+        "threes": "3PM", "steals": "STL", "blocks": "BLK",
+    })
+    st.dataframe(log_df, use_container_width=True, hide_index=True, column_config={
+        "MIN": st.column_config.NumberColumn(format="%.0f"),
+        "PTS": st.column_config.NumberColumn(format="%.0f"),
+        "REB": st.column_config.NumberColumn(format="%.0f"),
+        "AST": st.column_config.NumberColumn(format="%.0f"),
+        "3PM": st.column_config.NumberColumn(format="%.0f"),
+        "STL": st.column_config.NumberColumn(format="%.0f"),
+        "BLK": st.column_config.NumberColumn(format="%.0f"),
+    })
+
+    st.stop()
+
+
 if nav_choice == "Auto Picks":
     st.title("Auto Picks")
     st.caption("Strong Overs and Strong Unders generated automatically every morning.")
