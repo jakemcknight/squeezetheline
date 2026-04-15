@@ -63,14 +63,15 @@ def get_events_for_date(date: datetime.date = None) -> list[dict]:
     return filtered
 
 
-def get_event_props(event_id: str) -> list[dict]:
+def get_event_props(event_id: str, all_books: bool = False) -> list[dict]:
     """
     Fetch player prop lines for a single event.
 
-    Costs ~1 credit per market per region. By batching all markets into one
-    call and using a single region, this is very credit-efficient.
+    By default returns only the PREFERRED_BOOKMAKER's lines (one entry per
+    player/stat). If `all_books=True`, returns one entry per book per
+    player/stat with a `book` field for line shopping.
 
-    Returns a list of dicts: {type, player, spread}.
+    Returns a list of dicts: {type, player, spread, book?}.
     """
     url = f"{ODDS_API_BASE}/sports/basketball_nba/events/{event_id}/odds"
     resp = requests.get(url, params={
@@ -82,20 +83,40 @@ def get_event_props(event_id: str) -> list[dict]:
     resp.raise_for_status()
     data = resp.json()
 
-    props = []
     bookmakers = data.get("bookmakers", [])
+    if not bookmakers:
+        return []
 
-    # Try preferred bookmaker first, fall back to whatever is available
+    if all_books:
+        # Return outcomes from every bookmaker
+        props = []
+        for book in bookmakers:
+            book_key = book.get("key", "")
+            for market in book.get("markets", []):
+                prop_type = MARKET_MAP.get(market["key"])
+                if prop_type is None:
+                    continue
+                for outcome in market.get("outcomes", []):
+                    if outcome["name"] == "Over":
+                        props.append({
+                            "type": prop_type,
+                            "player": outcome["description"],
+                            "spread": outcome["point"],
+                            "price": outcome.get("price"),
+                            "book": book_key,
+                        })
+        return props
+
+    # Single-book mode: prefer DraftKings, fall back to whatever is available
     book = None
     for b in bookmakers:
         if b["key"] == PREFERRED_BOOKMAKER:
             book = b
             break
-    if book is None and bookmakers:
-        book = bookmakers[0]
     if book is None:
-        return props
+        book = bookmakers[0]
 
+    props = []
     for market in book.get("markets", []):
         prop_type = MARKET_MAP.get(market["key"])
         if prop_type is None:
@@ -107,7 +128,6 @@ def get_event_props(event_id: str) -> list[dict]:
                     "player": outcome["description"],
                     "spread": outcome["point"],
                 })
-
     return props
 
 
@@ -138,11 +158,16 @@ def get_todays_games(date: datetime.date = None) -> dict[str, str]:
     return games
 
 
-def get_all_props(date: datetime.date = None) -> pd.DataFrame:
+def get_all_props(date: datetime.date = None, all_books: bool = False) -> pd.DataFrame:
     """
     Fetch player prop lines for all games on the given date.
 
-    Returns a DataFrame with columns: type, player, spread.
+    By default returns one row per player/stat (preferred book only).
+    With `all_books=True` returns one row per book per player/stat
+    (use for line shopping).
+
+    Returns a DataFrame with columns: type, player, spread (and book, price
+    when `all_books=True`).
     """
     events = get_events_for_date(date)
     print(f"  Found {len(events)} games on {date or datetime.date.today()}")
@@ -152,7 +177,7 @@ def get_all_props(date: datetime.date = None) -> pd.DataFrame:
         home = event.get("home_team", "")
         away = event.get("away_team", "")
         print(f"  Fetching props: {away} @ {home}...")
-        event_props = get_event_props(event["id"])
+        event_props = get_event_props(event["id"], all_books=all_books)
         all_props.extend(event_props)
 
     print(f"  {len(all_props)} total prop lines fetched")

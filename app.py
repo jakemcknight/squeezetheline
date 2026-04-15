@@ -273,15 +273,29 @@ def load_daily_results(date: datetime.date):
     return events, results, summaries
 
 
-def fetch_fresh_data(date: datetime.date):
-    """Hit all APIs and run the full analysis pipeline for the given date."""
+def fetch_fresh_data(date: datetime.date, all_books: bool = False):
+    """Hit all APIs and run the full analysis pipeline for the given date.
+
+    When `all_books=True`, also pull props from every US bookmaker so the
+    player detail page can show line shopping comparisons.
+    """
     events = get_events_for_date(date)
     todays_games = get_todays_games(date)
     stats = get_current_season_stats()
     positions = get_player_positions()
     df = prepare_stats(stats, positions)
-    props = get_all_props(date)
-    props = prepare_props(props)
+    raw_props = get_all_props(date, all_books=all_books)
+    # For the main analysis, dedupe to one line per player/stat (best/median).
+    # Save the raw multi-book table separately for the detail view.
+    if all_books and "book" in raw_props.columns:
+        # Use the median line per player+market for the analysis (stable across books)
+        analysis_props = (
+            raw_props.groupby(["type", "player"])["spread"]
+            .median().reset_index()
+        )
+    else:
+        analysis_props = raw_props.copy()
+    props = prepare_props(analysis_props)
     defense = get_defense_by_position()
 
     player_urls = positions[["name", "player_url"]].drop_duplicates(subset="name")
@@ -322,6 +336,13 @@ def fetch_fresh_data(date: datetime.date):
                     "status_short": row.get("status_short", ""),
                     "comment": row.get("comment", ""),
                 }
+
+    # If we pulled multi-book data, attach per-player line-shopping table
+    if all_books and "book" in raw_props.columns:
+        for name, summary in summaries.items():
+            player_books = raw_props[raw_props["player"] == name]
+            if not player_books.empty:
+                summary["all_books"] = player_books.to_dict("records")
 
     return events, results, summaries
 
@@ -619,6 +640,32 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                 st.metric(label, f"Line: {line}", delta=f"{delta:+.1f} vs season avg")
                 st.caption(f"Season: {s_avg:.1f}  |  Career: {c_avg:.1f}")
 
+    # --- Line shopping (when multi-book data is present) ---
+    all_books = summary.get("all_books")
+    if all_books:
+        st.subheader("Line Shopping")
+        st.caption("Best line per stat across every available US sportsbook.")
+        BOOK_LABELS = {
+            "draftkings": "DraftKings", "fanduel": "FanDuel", "betmgm": "BetMGM",
+            "caesars": "Caesars", "betrivers": "BetRivers", "pointsbetus": "PointsBet",
+            "wynnbet": "WynnBet", "unibet_us": "Unibet", "barstool": "Barstool",
+        }
+        books_df = pd.DataFrame(all_books)
+        # Pivot so each prop type is a row and each book is a column
+        for prop_type, group in books_df.groupby("type"):
+            st.markdown(f"**{prop_type}**")
+            display = group[["book", "spread", "price"]].rename(
+                columns={"book": "Book", "spread": "Line", "price": "Odds"}
+            )
+            display["Book"] = display["Book"].map(lambda b: BOOK_LABELS.get(b, b))
+            display = display.sort_values("Line", ascending=False).reset_index(drop=True)
+            _, ls_mid, _ = st.columns([1, 4, 1])
+            with ls_mid:
+                st.dataframe(display, use_container_width=True, hide_index=True, column_config={
+                    "Line": st.column_config.NumberColumn(format="%.1f"),
+                    "Odds": st.column_config.NumberColumn(format="%+d"),
+                })
+
     # --- Last 10 games charts ---
     last_20 = summary.get("last_20", [])
     if last_20:
@@ -889,11 +936,22 @@ with st.sidebar:
 
     if st.button("Fetch / Refresh Data", type="primary", use_container_width=True):
         with st.spinner("Fetching from NBA.com + The Odds API..."):
-            events, results, summaries = fetch_fresh_data(selected_date)
+            shop = st.session_state.get("line_shopping", False)
+            events, results, summaries = fetch_fresh_data(selected_date, all_books=shop)
             save_daily_results(events, results, summaries, selected_date)
             st.cache_data.clear()
             st.session_state.pop("selected_player", None)
         st.rerun()
+
+    # Optional line shopping (multi-book) — costs more API credits per book per market
+    line_shopping = st.checkbox(
+        "Enable line shopping (all books)",
+        value=st.session_state.get("line_shopping", False),
+        help="Pulls lines from every US sportsbook (DK, FD, MGM, Caesars, etc.) instead "
+             "of just DraftKings. Player detail page will show the best line per book. "
+             "Uses ~5x more Odds API credits per refresh.",
+    )
+    st.session_state["line_shopping"] = line_shopping
 
     # Show a backfill prompt only when no historical data (compressed or raw) exists
     from data import HISTORICAL_DATA_PATH, HISTORICAL_DATA_GZ_PATH
