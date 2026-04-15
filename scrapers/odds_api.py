@@ -34,6 +34,11 @@ MARKETS = ",".join(MARKET_MAP.keys())
 EASTERN = ZoneInfo("America/New_York")
 
 
+class OddsAPIQuotaError(Exception):
+    """Raised when the Odds API rejects a paid endpoint (typically 401 for credit-exhausted)."""
+    pass
+
+
 def get_nba_events() -> list[dict]:
     """
     Fetch all upcoming NBA events (games). This endpoint is free — no credit cost.
@@ -80,6 +85,22 @@ def get_event_props(event_id: str, all_books: bool = False) -> list[dict]:
         "markets": MARKETS,
         "oddsFormat": "american",
     })
+
+    # Surface remaining quota for diagnostics
+    remaining = resp.headers.get("x-requests-remaining")
+    used = resp.headers.get("x-requests-used")
+    if remaining is not None:
+        print(f"  Odds API credits — used: {used}, remaining: {remaining}")
+
+    if resp.status_code == 401:
+        # Most common cause: monthly credit limit exhausted.
+        # The events endpoint is free, props endpoint costs ~7 credits per game.
+        raise OddsAPIQuotaError(
+            f"The Odds API rejected the request (401). "
+            f"Remaining credits: {remaining}. Most likely your monthly "
+            f"credit allowance is exhausted — visit https://the-odds-api.com to check "
+            f"or upgrade your plan."
+        )
     resp.raise_for_status()
     data = resp.json()
 

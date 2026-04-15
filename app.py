@@ -7,7 +7,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
-from scrapers.odds_api import get_todays_games, get_all_props, get_events_for_date, get_game_times
+from scrapers.odds_api import get_todays_games, get_all_props, get_events_for_date, get_game_times, OddsAPIQuotaError
 from scrapers.nba import get_current_season_stats, get_player_positions
 from scrapers.basketball_ref import get_defense_by_position
 from scrapers.injuries import get_injury_report
@@ -1156,13 +1156,22 @@ with st.sidebar:
 
     if is_admin():
         if st.button("Fetch / Refresh Data", type="primary", use_container_width=True):
-            with st.spinner("Fetching from NBA.com + The Odds API..."):
-                shop = st.session_state.get("line_shopping", False)
-                events, results, summaries = fetch_fresh_data(selected_date, all_books=shop)
-                save_daily_results(events, results, summaries, selected_date)
-                st.cache_data.clear()
-                st.session_state.pop("selected_player", None)
-            st.rerun()
+            try:
+                with st.spinner("Fetching from NBA.com + The Odds API..."):
+                    shop = st.session_state.get("line_shopping", False)
+                    events, results, summaries = fetch_fresh_data(selected_date, all_books=shop)
+                    save_daily_results(events, results, summaries, selected_date)
+                    st.cache_data.clear()
+                    st.session_state.pop("selected_player", None)
+                st.rerun()
+            except OddsAPIQuotaError as e:
+                st.error(str(e))
+                st.info(
+                    "Tip: every refresh costs ~7 credits per game (1 per market). "
+                    "Trim the markets list in scrapers/odds_api.py (MARKET_MAP) to "
+                    "save credits, or upgrade at https://the-odds-api.com — paid "
+                    "tier starts at $30/mo for 20k credits."
+                )
     else:
         st.caption("Only admins can refresh data. Reach out to the site owner to be granted access.")
 
