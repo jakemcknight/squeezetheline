@@ -7,7 +7,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
-from scrapers.odds_api import get_todays_games, get_all_props, get_events_for_date
+from scrapers.odds_api import get_todays_games, get_all_props, get_events_for_date, get_game_times
 from scrapers.nba import get_current_season_stats, get_player_positions
 from scrapers.basketball_ref import get_defense_by_position
 from scrapers.injuries import get_injury_report
@@ -298,7 +298,7 @@ STAT_CONFIGS = [
 ]
 
 DISPLAY_COLS = [
-    "name", "trend", "last10", "status_short", "starter", "player_url", "team-code", "opponent", "position", "spread",
+    "name", "trend", "last10", "game_status", "status_short", "starter", "player_url", "team-code", "opponent", "position", "spread",
     "delta", "delta_5g", "delta_10g",
     "hit%", "history_hit%",
     "vs_opp_season", "vs_opp_career",
@@ -373,6 +373,28 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False):
         else pd.DataFrame(columns=["name", "status_short", "comment"])
     )
 
+    # Game tipoff times per team (so we can flag in-progress / completed games)
+    game_times = get_game_times(date)
+    now_utc = pd.Timestamp.now(tz="UTC")
+
+    def _classify(team_code: str) -> dict:
+        commence = game_times.get(team_code)
+        if not commence:
+            return {"game_status": "unknown", "tipoff": ""}
+        try:
+            tipoff = pd.Timestamp(commence)
+            if tipoff.tzinfo is None:
+                tipoff = tipoff.tz_localize("UTC")
+            if now_utc < tipoff:
+                status = "pregame"
+            elif now_utc < tipoff + pd.Timedelta(hours=3):
+                status = "live"
+            else:
+                status = "completed"
+            return {"game_status": status, "tipoff": tipoff.isoformat()}
+        except Exception:
+            return {"game_status": "unknown", "tipoff": commence}
+
     results = {}
     for stat, prop_type in STAT_CONFIGS:
         result = analyze_stat(stat, prop_type, df, props, todays_games, defense, game_date=date)
@@ -384,6 +406,10 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False):
         for col in ("status_short", "comment"):
             if col in result.columns:
                 result[col] = result[col].fillna("")
+        # Tag each row with its game's status (pregame / live / completed)
+        status_info = result["team-code"].apply(_classify).apply(pd.Series)
+        result["game_status"] = status_info["game_status"]
+        result["tipoff"] = status_info["tipoff"]
         results[stat] = result
 
     # Build per-player summaries for the detail view
@@ -416,6 +442,7 @@ COLUMN_CONFIG = {
     "name": st.column_config.TextColumn("Player"),
     "trend": st.column_config.TextColumn("Trend", help="↑ last-5 avg > last-10 avg (trending up), ↓ trending down, → flat"),
     "last10": st.column_config.BarChartColumn("Last 10", help="Stat values across the player's last 10 games (most recent on right)"),
+    "game_status": st.column_config.TextColumn("Game", help="pregame / live / completed — live games show in-game lines that aren't pre-game lines"),
     "status_short": st.column_config.TextColumn("Inj", help="Injury status (OUT/DBT/Q/DTD/PROB)"),
     "starter": st.column_config.CheckboxColumn("Starter", help="Top 5 mpg on team in last 10 games"),
     "player_url": st.column_config.LinkColumn("Profile", display_text="NBA.com"),
@@ -645,6 +672,29 @@ def render_player_detail(name: str, summaries: dict, results: dict):
     pos = summary.get("position", "")
     st.title(name)
     st.caption(f"{team}  |  {pos}")
+
+    # Game status banner (pregame / live / completed) for this player
+    # Pull from the first available results dataframe
+    for result_df in results.values():
+        if not result_df.empty and "game_status" in result_df.columns:
+            row = result_df[result_df["name"] == name]
+            if not row.empty:
+                gs = row.iloc[0]["game_status"]
+                tipoff = row.iloc[0].get("tipoff", "")
+                tipoff_str = ""
+                if tipoff:
+                    try:
+                        t = pd.Timestamp(tipoff).tz_convert("America/New_York")
+                        tipoff_str = t.strftime("%-I:%M %p ET") if os.name != "nt" else t.strftime("%#I:%M %p ET")
+                    except Exception:
+                        tipoff_str = tipoff
+                if gs == "live":
+                    st.error(f"LIVE — game is in progress (tipped off at {tipoff_str}). Lines may be live, not pre-game.")
+                elif gs == "completed":
+                    st.warning(f"Game has finished (tipped off at {tipoff_str}).")
+                elif gs == "pregame" and tipoff_str:
+                    st.caption(f"Tipoff: {tipoff_str}")
+            break
 
     injury = summary.get("injury")
     if injury:
@@ -1096,6 +1146,29 @@ if cached is None:
 
 events, results, summaries = cached
 
+# --- Game status banner ---
+# Use the first stat's results for the count (game_status is per-row but consistent per team)
+_first_result = next(iter(results.values()), pd.DataFrame())
+if "game_status" in _first_result.columns and not _first_result.empty:
+    status_counts = _first_result.drop_duplicates("team-code")["game_status"].value_counts().to_dict()
+    pre = status_counts.get("pregame", 0)
+    live = status_counts.get("live", 0)
+    done = status_counts.get("completed", 0)
+    parts = []
+    if pre:
+        parts.append(f"**{pre}** pregame")
+    if live:
+        parts.append(f"**{live}** :red[LIVE]")
+    if done:
+        parts.append(f"**{done}** completed")
+    if parts:
+        banner = "Game status: " + " · ".join(parts)
+        if live or done:
+            banner += "  ·  *(toggle 'Include live / completed games' in the sidebar to see them)*"
+            st.warning(banner)
+        else:
+            st.info(banner)
+
 # --- My Picks view ---
 if st.session_state.get("view_picks") and st.session_state.get("pick_tracking"):
     if st.button("Back to picks board"):
@@ -1381,6 +1454,13 @@ with st.sidebar:
         help="Ruled-out and doubtful players are hidden by default — they skew picks since they won't play.",
     )
 
+    include_live = st.checkbox(
+        "Include live / completed games",
+        value=False,
+        help="Games that have already tipped off return live (in-game) lines that don't reflect "
+             "the pre-game line. These are hidden by default.",
+    )
+
 # --- Apply filters ---
 filtered = result.copy()
 if selected_teams:
@@ -1397,6 +1477,10 @@ filtered = filtered[
 if not include_inactive and "status_short" in filtered.columns:
     inactive_codes = {"OUT", "DBT"}
     filtered = filtered[~filtered["status_short"].fillna("").isin(inactive_codes)]
+
+# Auto-hide live / completed games (lines aren't pre-game) unless the user opts in
+if not include_live and "game_status" in filtered.columns:
+    filtered = filtered[filtered["game_status"].isin(["pregame", "unknown"])]
 
 # --- Display columns (only show what exists) ---
 show_cols = [c for c in DISPLAY_COLS if c in filtered.columns]

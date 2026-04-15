@@ -158,6 +158,21 @@ def get_todays_games(date: datetime.date = None) -> dict[str, str]:
     return games
 
 
+def get_game_times(date: datetime.date = None) -> dict[str, str]:
+    """Return a dict mapping each team code to its game's commence_time (ISO string)."""
+    events = get_events_for_date(date)
+    times = {}
+    for event in events:
+        commence = event.get("commence_time", "")
+        if not commence:
+            continue
+        away = _team_code(event["away_team"])
+        home = _team_code(event["home_team"])
+        times[away] = commence
+        times[home] = commence
+    return times
+
+
 def get_all_props(date: datetime.date = None, all_books: bool = False) -> pd.DataFrame:
     """
     Fetch player prop lines for all games on the given date.
