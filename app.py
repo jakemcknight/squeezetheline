@@ -320,7 +320,7 @@ STAT_CONFIGS = [
 ]
 
 DISPLAY_COLS = [
-    "name", "trend", "last10", "game_status", "status_short", "starter", "player_url", "team-code", "opponent", "position", "spread",
+    "name", "trend", "last10", "last10_hits", "game_status", "status_short", "starter", "player_url", "team-code", "opponent", "position", "spread",
     "delta", "delta_5g", "delta_10g",
     "hit%", "history_hit%",
     "vs_opp_season", "vs_opp_career",
@@ -474,6 +474,7 @@ COLUMN_CONFIG = {
     "name": st.column_config.TextColumn("Player"),
     "trend": st.column_config.TextColumn("Trend", help="↑ last-5 avg > last-10 avg (trending up), ↓ trending down, → flat"),
     "last10": st.column_config.BarChartColumn("Last 10", help="Stat values across the player's last 10 games (most recent on right)"),
+    "last10_hits": st.column_config.TextColumn("Hit/Miss", help="Each square = one of the last 10 games vs tonight's line. Green = beat the line, red = missed."),
     "game_status": st.column_config.TextColumn("Game", help="pregame / live / completed — live games show in-game lines that aren't pre-game lines"),
     "status_short": st.column_config.TextColumn("Inj", help="Injury status (OUT/DBT/Q/DTD/PROB)"),
     "starter": st.column_config.CheckboxColumn("Starter", help="Top 5 mpg on team in last 10 games"),

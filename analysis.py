@@ -190,6 +190,8 @@ def analyze_stat(
         stat_props["history_hit%"] = None
 
     # --- Last-10 sparkline data: list of stat values most recent → oldest ---
+    # We sort ascending by rank so most-recent is first; the inline bar chart
+    # in the table reads it most-recent → oldest.
     last10_lookup = (
         df[df["rank"] <= 10]
         .sort_values(["name", "rank"])
@@ -198,6 +200,27 @@ def analyze_stat(
         .to_dict()
     )
     stat_props["last10"] = stat_props["name"].map(last10_lookup)
+
+    # --- Last-10 hit/miss visual: colored squares for each game vs tonight's line ---
+    def _hit_squares(row):
+        values = last10_lookup.get(row["name"]) or []
+        line = row.get("spread")
+        if line is None or pd.isna(line):
+            return ""
+        # Reverse so oldest is on left, most recent on right (chronological)
+        squares = []
+        for v in reversed(values):
+            if pd.isna(v):
+                continue
+            if v > line:
+                squares.append("\U0001f7e9")  # green square
+            elif v < line:
+                squares.append("\U0001f7e5")  # red square
+            else:
+                squares.append("\u26ab")  # black circle (push)
+        return "".join(squares)
+
+    stat_props["last10_hits"] = stat_props.apply(_hit_squares, axis=1)
 
     # --- Trend indicator: is the last-5 avg above or below the last-10 avg? ---
     stat_props["trend"] = stat_props.apply(
