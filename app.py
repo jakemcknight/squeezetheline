@@ -1481,6 +1481,48 @@ if nav_choice == "What-If":
     else:
         st.caption(f"No prop lines for {eval_player} on the current slate (or data not refreshed).")
 
+    # --- Charts: per-stat bar charts of the filtered games ---
+    if tonight_lines:
+        st.subheader(f"Last 10 games with {out_player} out")
+        # Build the chart data: dicts of {date, opponent, pts, reb, ast, ...}
+        recent = eval_games_with_out_player_absent.head(10).copy()
+        chart_records = []
+        for _, g in recent.iterrows():
+            chart_records.append({
+                "date": g["gameday"].strftime("%Y-%m-%d") if pd.notna(g["gameday"]) else "",
+                "opponent": g.get("opponent", ""),
+                "pts": float(g.get("points", 0)),
+                "reb": float(g.get("rebounds", 0)),
+                "ast": float(g.get("assists", 0)),
+                "pra": float(g.get("pra", 0)),
+                "threes": float(g.get("threes", 0)),
+                "steals": float(g.get("steals", 0)),
+                "blocks": float(g.get("blocks", 0)),
+            })
+
+        chart_stats = [
+            ("points", "Points", "pts"),
+            ("rebounds", "Rebounds", "reb"),
+            ("assists", "Assists", "ast"),
+            ("pra", "PRA", "pra"),
+            ("threes", "3PM", "threes"),
+            ("steals", "Steals", "steals"),
+            ("blocks", "Blocks", "blocks"),
+        ]
+        active_charts = [s for s in chart_stats if s[0] in tonight_lines]
+        n_chart_cols = min(len(active_charts), 3)
+        if n_chart_cols > 0:
+            chart_cols = st.columns(n_chart_cols)
+            for i, (full_stat, label, game_key) in enumerate(active_charts):
+                with chart_cols[i % n_chart_cols]:
+                    chart = make_last_n_chart(
+                        chart_records, game_key, label,
+                        tonight_lines.get(full_stat),
+                        n=10,
+                    )
+                    if chart is not None:
+                        st.altair_chart(chart, use_container_width=True)
+
     rows = [
         _avg_row("All games (baseline)", eval_games_played),
         _avg_row(f"With {out_player} OUT", eval_games_with_out_player_absent),
