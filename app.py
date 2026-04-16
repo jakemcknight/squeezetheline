@@ -1230,6 +1230,8 @@ events, results, summaries = cached
 
 # --- Top navigation ---
 nav_options = ["Picks Board", "Auto Picks", "What-If"]
+if is_admin():
+    nav_options.append("AI Analysis")
 if st.session_state.get("pick_tracking"):
     nav_options.append("My Picks")
 
@@ -1584,6 +1586,90 @@ if nav_choice == "What-If":
         "STL": st.column_config.NumberColumn(format="%.0f"),
         "BLK": st.column_config.NumberColumn(format="%.0f"),
     })
+
+    st.stop()
+
+
+if nav_choice == "AI Analysis" and is_admin():
+    st.title("AI Prop Analysis")
+    st.caption(
+        "Ask Claude to evaluate a specific prop. Uses all the data we have "
+        "about the player, matchup, recent form, and tonight's line."
+    )
+
+    from ai_analysis import analyze_prop, STAT_LABEL
+
+    players_with_props = sorted(summaries.keys()) if summaries else []
+    if not players_with_props:
+        st.info("No players with props yet. Click Fetch / Refresh Data first.")
+        st.stop()
+
+    ac1, ac2 = st.columns([2, 1])
+    with ac1:
+        ai_player = st.selectbox(
+            "Player",
+            options=players_with_props,
+            index=0,
+            key="ai_player",
+        )
+
+    # What stats does this player have a line on today?
+    player_lines = (summaries.get(ai_player, {}) or {}).get("today_lines", {}) or {}
+    if not player_lines:
+        st.warning(f"{ai_player} doesn't have any prop lines on the current slate.")
+        st.stop()
+
+    with ac2:
+        ai_stat = st.selectbox(
+            "Stat",
+            options=list(player_lines.keys()),
+            format_func=lambda k: STAT_LABEL.get(k, k),
+            key="ai_stat",
+        )
+
+    default_line = float(player_lines.get(ai_stat, 0.0))
+    ac3, ac4, ac5 = st.columns([1, 1, 1])
+    with ac3:
+        ai_line = st.number_input(
+            "Line", value=default_line, step=0.5, key="ai_line",
+            help="Defaults to tonight's book line; override if you're evaluating a different number.",
+        )
+    with ac4:
+        ai_side = st.radio("Side", ["Over", "Under"], horizontal=True, key="ai_side")
+    with ac5:
+        st.write("")
+        st.write("")
+        go = st.button("Ask Claude", type="primary", use_container_width=True)
+
+    if go:
+        # Look up the full result_row for this player + stat
+        result_df = results.get(ai_stat)
+        result_row = None
+        if result_df is not None and not result_df.empty:
+            rows = result_df[result_df["name"] == ai_player]
+            if not rows.empty:
+                result_row = rows.iloc[0].to_dict()
+
+        with st.spinner("Claude is thinking..."):
+            resp = analyze_prop(
+                player=ai_player,
+                stat=ai_stat,
+                line=float(ai_line),
+                side=ai_side.lower(),
+                summary=summaries.get(ai_player, {}),
+                result_row=result_row,
+            )
+
+        if "error" in resp:
+            st.error(resp["error"])
+        else:
+            st.markdown(resp["text"])
+            usage = resp.get("usage", {})
+            if usage:
+                st.caption(
+                    f"Model: {resp.get('model', '?')} · "
+                    f"Tokens in/out: {usage.get('input_tokens', 0)}/{usage.get('output_tokens', 0)}"
+                )
 
     st.stop()
 
