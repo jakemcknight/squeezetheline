@@ -1368,12 +1368,35 @@ if nav_choice == "What-If":
         st.warning(f"Need at least 2 players on {sel_team}.")
         st.stop()
 
+    # Pull the injury report so we can label the OUT-player dropdown.
+    # Cache for 5 minutes so flipping selectors doesn't re-hit ESPN.
+    @st.cache_data(ttl=300)
+    def _whatif_injuries():
+        from scrapers.injuries import get_injury_report
+        inj = get_injury_report()
+        return dict(zip(inj["name"], inj["status_short"])) if not inj.empty else {}
+
+    injury_status = _whatif_injuries()
+
     c1, c2 = st.columns(2)
     with c1:
         eval_player = st.selectbox("Player to evaluate", options=roster, key="whatif_eval")
     with c2:
         out_options = [p for p in roster if p != eval_player]
-        out_player = st.selectbox("Player who is OUT", options=out_options, key="whatif_out")
+        # Sort: currently-injured players first (most relevant for "out"),
+        # then everyone else alphabetically.
+        out_options.sort(key=lambda n: (not bool(injury_status.get(n)), n))
+
+        def _format_out_player(name: str) -> str:
+            status = injury_status.get(name, "")
+            return f"{name} — {status}" if status else name
+
+        out_player = st.selectbox(
+            "Player who is OUT",
+            options=out_options,
+            format_func=_format_out_player,
+            key="whatif_out",
+        )
 
     period = st.radio(
         "Period",
