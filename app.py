@@ -387,24 +387,11 @@ if not render_auth_gate():
     st.stop()
 
 
-# --- Run daily auto-jobs (refresh + grade) — admin-only ---
-# The auto-pipeline takes 30-60 seconds per step because it hits NBA.com.
-# Only admins trigger it; regular users just see whatever is already in
-# Supabase so their login is instant. Only runs once per session.
-if is_admin() and not st.session_state.get("_daily_jobs_attempted"):
-    st.session_state["_daily_jobs_attempted"] = True
-    # Quick checks first (just Supabase reads) so we can skip the full
-    # pipeline load spinner when nothing actually needs to run.
-    from auto_runner import maybe_auto_refresh, maybe_auto_grade
-    with st.spinner("Checking for daily auto-picks..."):
-        refresh_status = maybe_auto_refresh()
-    if refresh_status.get("action") == "ran":
-        st.toast(f"Auto-generated {refresh_status.get('saved', 0)} picks for today.")
-    with st.spinner("Checking for pending picks to grade..."):
-        grade_status = maybe_auto_grade()
-    if grade_status.get("action") == "ran":
-        st.toast(f"Graded {grade_status.get('graded', 0)} pending picks.")
-    st.session_state["_last_job_status"] = {"refresh": refresh_status, "grade": grade_status}
+# Daily auto-jobs (refresh + grade) are now driven by the cron webhook —
+# cron-job.org hits /?refresh_token=... twice a day and runs the pipeline
+# in a background thread on Streamlit Cloud. Admins no longer trigger it
+# on login, so logins are instant. The admin panel on Auto Picks still has
+# manual trigger buttons if you ever need to force a run.
 
 STAT_CONFIGS = [
     ("points", "Total Points"),
