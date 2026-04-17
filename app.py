@@ -967,6 +967,70 @@ def render_player_detail(name: str, summaries: dict, results: dict):
     except Exception:
         pass
 
+    # --- EV + Kelly calculator ---
+    st.subheader("EV + Kelly calculator")
+    st.caption(
+        "Enter the actual book odds for each prop to see expected value per $1 "
+        "staked and a suggested bet size (quarter-Kelly on a $1,000 bankroll). "
+        "Uses this season's hit% as the estimated win probability."
+    )
+    from performance import ev_and_kelly
+    bankroll = st.number_input(
+        "Bankroll", min_value=10.0, value=1000.0, step=100.0, key="ev_bankroll_input",
+    )
+
+    ev_rows = []
+    # Get each player's per-stat hit% from the results dict
+    for stat_key, label, _ in active_stats:
+        line = lines.get(stat_key)
+        if line is None:
+            continue
+        result_df = results.get(stat_key)
+        if result_df is None or result_df.empty:
+            continue
+        player_rows = result_df[result_df["name"] == name]
+        if player_rows.empty:
+            continue
+        hit_pct = player_rows.iloc[0].get("hit%")
+        if hit_pct is None or pd.isna(hit_pct):
+            continue
+        # Collect the odds input per stat
+        odds_key = f"ev_odds_{name}_{stat_key}"
+        odds = st.session_state.get(odds_key, -110)
+        ev_rows.append({
+            "stat_key": stat_key, "label": label, "line": line,
+            "hit_pct": float(hit_pct), "odds": int(odds),
+        })
+
+    if ev_rows:
+        ev_cols = st.columns(min(len(ev_rows), 3))
+        for i, row in enumerate(ev_rows):
+            with ev_cols[i % len(ev_cols)]:
+                st.markdown(f"**{row['label']}** — Line {row['line']:.1f}")
+                odds_val = st.number_input(
+                    "Book odds (American)", value=row["odds"], step=5,
+                    key=f"ev_odds_{name}_{row['stat_key']}",
+                )
+                result = ev_and_kelly(row["hit_pct"], int(odds_val), bankroll=bankroll)
+                if not result:
+                    continue
+                ev_color = "#22c55e" if result["ev_per_dollar"] > 0 else "#ef4444"
+                st.markdown(
+                    f"""
+                    <div style='background:#1a1d24;border-left:3px solid {ev_color};
+                                padding:8px 12px;border-radius:4px;margin-top:4px;'>
+                      <div style='font-size:0.85rem;color:#8b92a5;'>Hit {result['hit_pct']}% vs implied {result['implied_pct']}%</div>
+                      <div style='font-size:0.9rem;color:{ev_color};font-weight:700;'>
+                        EV: {result['ev_per_dollar']:+.3f} / $1 &nbsp;·&nbsp; Edge: {result['edge_pct']:+.1f}%
+                      </div>
+                      <div style='font-size:0.85rem;color:#8b92a5;margin-top:4px;'>
+                        Kelly ¼: {result['kelly_quarter_pct']:.2f}% &nbsp;·&nbsp; Stake: ${result['suggested_stake']:.2f}
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
     # --- Line shopping (when multi-book data is present) ---
     all_books = summary.get("all_books")
     if all_books:
