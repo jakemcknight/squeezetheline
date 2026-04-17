@@ -85,6 +85,28 @@ def build_context_block(player: str, stat: str, summary: dict, result_row: Optio
         for g in vs_opp[:10]
     )
 
+    # Pull tracked book-line history if we've accumulated any
+    try:
+        from prop_history import get_player_line_history
+        line_for_lookup = lines.get(stat)
+        line_hist = get_player_line_history(player, stat, near_line=float(line_for_lookup) if line_for_lookup else None)
+    except Exception:
+        line_hist = {"available": False}
+
+    line_history_block = ""
+    if line_hist.get("available") and line_hist.get("all_games", 0) > 0:
+        all_n = line_hist["all_games"]
+        all_o = line_hist["all_overs"]
+        all_pct = (all_o / all_n * 100) if all_n else 0
+        near_n = line_hist["near_games"]
+        near_o = line_hist["near_overs"]
+        near_pct = (near_o / near_n * 100) if near_n else 0
+        line_history_block = f"""
+### Tracked book-line history (real lines, not arbitrary thresholds)
+- All graded historical lines: {all_o} OVERs / {all_n} games ({all_pct:.0f}%)
+- Lines within ±1 of tonight's line: {near_o}/{near_n} ({near_pct:.0f}%)
+"""
+
     ctx = f"""### Player: {player}
 - Team: {team}
 - Position: {position}
@@ -126,7 +148,7 @@ def build_context_block(player: str, stat: str, summary: dict, result_row: Optio
 
 ### Trend indicator
 - Direction: {r.get('trend', 'n/a')} (up / down / flat based on last-5 vs last-10)
-"""
+{line_history_block}"""
     return ctx
 
 

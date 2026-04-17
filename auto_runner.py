@@ -78,7 +78,8 @@ def _get_pending_pick_dates() -> list[str]:
 
 
 def maybe_auto_refresh() -> dict:
-    """If conditions are met, generate today's picks. Returns a status dict."""
+    """If conditions are met, generate today's picks AND snapshot every prop
+    line for the day to historical_props. Returns a status dict."""
     now = _now_et()
     if now.hour < REFRESH_HOUR_ET:
         return {"action": "skip", "reason": f"too early (before {REFRESH_HOUR_ET}am ET)"}
@@ -93,7 +94,22 @@ def maybe_auto_refresh() -> dict:
     try:
         from auto_picks import generate_and_save_picks
         n = generate_and_save_picks(_today_et())
-        return {"action": "ran", "saved": n}
+
+        # Snapshot every prop line for the day so we build a real history
+        # of "did the player beat THIS exact line" over time.
+        snapshot_n = 0
+        try:
+            from scrapers.odds_api import get_all_props
+            from data import prepare_props
+            from prop_history import snapshot_props
+            raw_props = get_all_props(_today_et())
+            tidy_props = prepare_props(raw_props)
+            snapshot_n = snapshot_props(_today_et(), tidy_props)
+        except Exception as snap_err:
+            # Don't fail the whole refresh if snapshotting hiccups
+            return {"action": "ran", "saved": n, "snapshot_error": str(snap_err)}
+
+        return {"action": "ran", "saved": n, "snapshotted_lines": snapshot_n}
     except Exception as e:
         return {"action": "error", "error": str(e)}
     finally:
@@ -118,9 +134,20 @@ def maybe_auto_grade() -> dict:
         # Backfill latest box scores so we have yesterday's stats
         from backfill import backfill
         backfill()
+
         from auto_picks import grade_pending_picks
-        n = grade_pending_picks(_today_et())
-        return {"action": "ran", "graded": n}
+        n_picks = grade_pending_picks(_today_et())
+
+        # Also grade every snapshotted prop line in historical_props
+        n_props = 0
+        try:
+            from data import load_historical_data
+            from prop_history import grade_props
+            n_props = grade_props(load_historical_data(), _today_et())
+        except Exception as graded_err:
+            return {"action": "ran", "graded": n_picks, "props_grade_error": str(graded_err)}
+
+        return {"action": "ran", "graded": n_picks, "props_graded": n_props}
     except Exception as e:
         return {"action": "error", "error": str(e)}
     finally:

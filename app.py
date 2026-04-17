@@ -854,6 +854,42 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                             )
                             st.toast(f"Saved: {name} UNDER {line} {label}")
 
+    # --- Tracked book-line history (only after we've accumulated some) ---
+    try:
+        from prop_history import get_player_line_history
+        history_rows = []
+        for stat_key, label, _ in active_stats:
+            line = lines.get(stat_key)
+            if line is None:
+                continue
+            hist = get_player_line_history(name, stat_key, near_line=float(line))
+            if hist.get("available") and hist.get("all_games", 0) > 0:
+                all_n = hist["all_games"]
+                all_o = hist["all_overs"]
+                all_pct = (all_o / all_n * 100) if all_n else 0
+                near_n = hist["near_games"]
+                near_o = hist["near_overs"]
+                near_pct = (near_o / near_n * 100) if near_n else 0
+                history_rows.append({
+                    "Stat": label,
+                    "Tonight's Line": float(line),
+                    "Beat all-time": f"{all_o}/{all_n} ({all_pct:.0f}%)",
+                    f"Beat near {line:g} (±1)": f"{near_o}/{near_n} ({near_pct:.0f}%)" if near_n else "—",
+                })
+        if history_rows:
+            st.subheader("Tracked book-line history")
+            st.caption(
+                "How often this player has actually beat their book line in past games "
+                "(based on lines we've snapshotted since launch — grows over time)."
+            )
+            st.dataframe(
+                pd.DataFrame(history_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+    except Exception:
+        pass
+
     # --- Line shopping (when multi-book data is present) ---
     all_books = summary.get("all_books")
     if all_books:
