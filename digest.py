@@ -238,9 +238,21 @@ def send_email_via_resend(subject: str, html: str, text: str) -> bool:
 
 
 def send_daily_digest(date: Optional[datetime.date] = None) -> dict:
-    """Top-level: build and send the digest."""
+    """Top-level: build and send the digest.
+
+    If there are no picks for the day (no NBA games, or no strong picks
+    found), we skip the email by default — no point spamming the inbox
+    on off-days. Set `DIGEST_SEND_ON_EMPTY=true` in secrets if you want
+    a daily email regardless.
+    """
     d = date or datetime.date.today()
     picks = fetch_today_picks(d)
+
+    if not picks:
+        send_on_empty = _secret("DIGEST_SEND_ON_EMPTY", "").lower() in ("true", "1", "yes")
+        if not send_on_empty:
+            print(f"[digest] No picks for {d} — skipping email (set DIGEST_SEND_ON_EMPTY=true to override).")
+            return {"picks": 0, "email_sent": False, "skipped_reason": "no picks"}
 
     subject = f"Squeeze the Line — {d.strftime('%a %b %-d')} · {len(picks)} picks"
     html = build_digest_html(picks, d)

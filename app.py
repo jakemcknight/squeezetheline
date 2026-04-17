@@ -2187,8 +2187,29 @@ if "selected_player" in st.session_state and st.session_state["selected_player"]
     render_player_detail(st.session_state["selected_player"], summaries, results)
     st.stop()
 
+# --- No-games day handling ---
+# If the slate is empty, show a clear message instead of an empty board
+if not events:
+    st.markdown(
+        f"""
+        <div style='background:#1a1d24;border:1px solid #2a2f3a;border-radius:10px;
+                    padding:32px;text-align:center;margin:24px 0;'>
+          <div style='font-size:3rem;opacity:0.3;'>\U0001f3c0</div>
+          <div style='color:#e6edf3;font-size:1.3rem;font-weight:700;margin-top:8px;'>
+            No NBA games on {selected_date.strftime('%A, %b %-d') if os.name != 'nt' else selected_date.strftime('%A, %b %#d')}
+          </div>
+          <div style='color:#8b92a5;font-size:0.95rem;margin-top:8px;'>
+            Try a different date from the sidebar, or explore <strong>Performance</strong>,
+            <strong>What-If</strong>, or <strong>Auto Picks</strong> history in the top nav.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
 # --- Today's games ---
-with st.expander("Today's Games", expanded=False):
+with st.expander(f"Today's Games ({len(events)})", expanded=False):
     cols = st.columns(min(len(events), 4) if events else 1)
     for i, event in enumerate(events):
         with cols[i % len(cols)]:
