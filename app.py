@@ -337,12 +337,15 @@ if _webhook_token:
                 n_picks = generate_and_save_picks(today)
                 print(f"[webhook] Generated {n_picks} auto picks.")
 
-                # 2. Snapshot every prop line
+                # 2. Snapshot every prop line (once-per-day grading table)
+                #    AND capture line movement (append-only timeseries table)
                 try:
+                    from prop_history import snapshot_line_movement
                     raw_props = get_all_props(today)
                     tidy = prepare_props(raw_props)
                     n_snap = snapshot_props(today, tidy)
-                    print(f"[webhook] Snapshotted {n_snap} prop lines.")
+                    n_move = snapshot_line_movement(today, tidy)
+                    print(f"[webhook] Snapshotted {n_snap} props / {n_move} movement rows.")
                 except Exception as e:
                     print(f"[webhook] Snapshot failed (non-fatal): {e}")
 
@@ -964,6 +967,44 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                 use_container_width=True,
                 hide_index=True,
             )
+    except Exception:
+        pass
+
+    # --- Line movement today (if we've snapshotted multiple times) ---
+    try:
+        from prop_history import get_line_movement
+        movement_entries = {}
+        for stat_key, label, _ in active_stats:
+            snaps = get_line_movement(name, stat_key, datetime.date.today())
+            if len(snaps) >= 2:
+                movement_entries[stat_key] = (label, snaps)
+        if movement_entries:
+            st.subheader("Line movement today")
+            st.caption("How the book's line has shifted since first snapshot today.")
+            mv_cols = st.columns(min(len(movement_entries), 3))
+            for i, (stat_key, (label, snaps)) in enumerate(movement_entries.items()):
+                with mv_cols[i % len(mv_cols)]:
+                    open_line = snaps[0]["line"]
+                    current = snaps[-1]["line"]
+                    delta = current - open_line
+                    arrow = "↑" if delta > 0 else "↓" if delta < 0 else "→"
+                    color = "#22c55e" if delta > 0 else "#ef4444" if delta < 0 else "#8b92a5"
+                    st.metric(
+                        label,
+                        f"Now {current:.1f}",
+                        delta=f"{arrow} {abs(delta):.1f} from {open_line:.1f}",
+                    )
+                    # Mini sparkline
+                    mv_df = pd.DataFrame([
+                        {"t": pd.to_datetime(s["snapshot_at"]), "line": float(s["line"])}
+                        for s in snaps
+                    ])
+                    import altair as alt
+                    chart = alt.Chart(mv_df).mark_line(point=True, color=color).encode(
+                        x=alt.X("t:T", title=None, axis=alt.Axis(format="%-I%p") if os.name != "nt" else alt.Axis(format="%#I%p")),
+                        y=alt.Y("line:Q", title=None),
+                    ).properties(height=80)
+                    st.altair_chart(chart, use_container_width=True)
     except Exception:
         pass
 

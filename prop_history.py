@@ -58,6 +58,59 @@ def _anon_client():
     return get_supabase()
 
 
+def snapshot_line_movement(game_date: datetime.date, props_df: pd.DataFrame, book: str = "draftkings") -> int:
+    """Append one row per (date, player, stat, book) with a timestamp to
+    line_snapshots so we can track intraday line movement.
+
+    Intended to be called several times per day (via the webhook) so we
+    can see how lines move from morning open to tipoff.
+    """
+    sb = _admin_client()
+    if sb is None or props_df.empty:
+        return 0
+
+    now = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    rows = []
+    for _, row in props_df.iterrows():
+        stat_key = PROP_TYPE_TO_STAT.get(row.get("type"))
+        if not stat_key:
+            continue
+        rows.append({
+            "date": str(game_date),
+            "player": row["name"] if "name" in props_df.columns else row.get("player"),
+            "stat": stat_key,
+            "line": float(row["spread"]),
+            "book": book,
+            "snapshot_at": now,
+        })
+    if not rows:
+        return 0
+    # Insert (not upsert) so we keep every snapshot
+    sb.table("line_snapshots").insert(rows).execute()
+    return len(rows)
+
+
+def get_line_movement(player: str, stat: str, game_date: datetime.date, book: str = "draftkings") -> list[dict]:
+    """Return all snapshots for this player/stat on this date, ordered by time."""
+    sb = _anon_client()
+    if sb is None:
+        return []
+    try:
+        resp = (
+            sb.table("line_snapshots")
+            .select("snapshot_at, line")
+            .eq("player", player)
+            .eq("stat", stat)
+            .eq("date", str(game_date))
+            .eq("book", book)
+            .order("snapshot_at", desc=False)
+            .execute()
+        )
+        return resp.data or []
+    except Exception:
+        return []
+
+
 def snapshot_props(game_date: datetime.date, props_df: pd.DataFrame, book: str = "draftkings") -> int:
     """Upsert every prop line for the day to historical_props.
 
