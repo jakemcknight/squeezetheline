@@ -1923,6 +1923,31 @@ if nav_choice == "Performance":
             st.altair_chart(chart + breakeven, use_container_width=True)
             st.caption("Dashed line = break-even win rate at -110 odds (~52.4%).")
 
+    # --- Backtest ---
+    st.divider()
+    st.subheader("Backtest — what would have happened")
+    st.caption(
+        "Simulates several strategies against every tracked prop line we've "
+        "graded so far. Green ROI means that strategy was profitable at the price above."
+    )
+    if st.button("Run backtest", type="primary"):
+        from backtest import run_all_strategies
+        with st.spinner("Running backtest..."):
+            bt = run_all_strategies(date_from=date_from, odds=int(odds_price))
+        if bt.empty:
+            st.info("Not enough graded data yet. Check back after a few days of auto-runs.")
+        else:
+            st.dataframe(
+                bt,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "wagered": st.column_config.NumberColumn("Wagered", format="$%.2f"),
+                    "profit": st.column_config.NumberColumn("Profit", format="$%+.2f"),
+                    "roi": st.column_config.NumberColumn("ROI", format="%.1f%%"),
+                },
+            )
+
     # --- Historical props (tracked lines) ---
     st.divider()
     st.subheader("Tracked book-line history")
