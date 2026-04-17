@@ -360,6 +360,14 @@ if _webhook_token:
                 except Exception as e:
                     print(f"[webhook] Grade failed (non-fatal): {e}")
 
+                # 4. Post the daily digest (Discord webhook + on-site card)
+                try:
+                    from digest import send_daily_digest
+                    res = send_daily_digest(today)
+                    print(f"[webhook] Digest: {res['picks']} picks, discord_sent={res['discord_sent']}")
+                except Exception as e:
+                    print(f"[webhook] Digest failed (non-fatal): {e}")
+
                 print("[webhook] Pipeline complete.")
             except Exception as e:
                 print(f"[webhook] Pipeline error: {e}")
@@ -2188,6 +2196,36 @@ def _render_top_pick_row(row, side: str):
         f"</div></div>"
     )
 
+
+# --- Today at a glance (digest card) ---
+try:
+    from digest import fetch_today_picks, STAT_LABEL as _DIGEST_STAT_LABEL
+    today_picks = fetch_today_picks(datetime.date.today())
+    if today_picks:
+        n_top = sum(1 for p in today_picks if p.get("is_top_pick"))
+        with st.container():
+            st.markdown(
+                f"""
+                <div style='background:#1a1d24;border:1px solid #2a2f3a;
+                            border-radius:8px;padding:14px 18px;margin-bottom:16px;'>
+                  <div style='color:#22c55e;font-weight:700;font-size:0.8rem;
+                              text-transform:uppercase;letter-spacing:0.05em;'>
+                    Today at a glance
+                  </div>
+                  <div style='color:#e6edf3;font-size:1rem;margin-top:6px;'>
+                    <strong>{len(today_picks)}</strong> auto picks generated ·
+                    <strong>{n_top}</strong> flagged as top 5 of each side
+                  </div>
+                  <div style='color:#8b92a5;font-size:0.85rem;margin-top:4px;'>
+                    See them all under the <strong>Auto Picks</strong> tab, or
+                    subscribe to Discord for a daily summary.
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+except Exception:
+    pass
 
 with st.container():
     top_overs = _gather_top_picks(results, "over", limit=5)
