@@ -312,15 +312,60 @@ if _webhook_token:
         _expected_token = os.environ.get("REFRESH_TOKEN", "")
 
     if _expected_token and _webhook_token == _expected_token:
-        st.markdown("**Squeeze the Line — automated refresh**")
-        from auto_runner import maybe_auto_refresh, maybe_auto_grade
-        with st.spinner("Running daily refresh..."):
-            refresh = maybe_auto_refresh()
-        st.write({"refresh": refresh})
-        with st.spinner("Grading pending picks..."):
-            grade = maybe_auto_grade()
-        st.write({"grade": grade})
-        st.success("Done.")
+        # Fire-and-forget: start the heavy work in a background thread
+        # so we can return a 200 within the cron service's timeout (30s).
+        # The thread runs in the same Streamlit Cloud process and keeps
+        # going even after this script run ends.
+        import threading
+
+        def _webhook_background():
+            """Runs the full daily pipeline without Streamlit session context."""
+            import traceback
+            try:
+                from auto_picks import generate_and_save_picks
+                from scrapers.odds_api import get_all_props
+                from data import prepare_props, load_historical_data
+                from prop_history import snapshot_props, grade_props
+                from auto_picks import grade_pending_picks
+                from backfill import backfill
+                import datetime as _dt
+
+                today = _dt.date.today()
+                print(f"[webhook] Starting daily pipeline for {today}...")
+
+                # 1. Generate auto picks
+                n_picks = generate_and_save_picks(today)
+                print(f"[webhook] Generated {n_picks} auto picks.")
+
+                # 2. Snapshot every prop line
+                try:
+                    raw_props = get_all_props(today)
+                    tidy = prepare_props(raw_props)
+                    n_snap = snapshot_props(today, tidy)
+                    print(f"[webhook] Snapshotted {n_snap} prop lines.")
+                except Exception as e:
+                    print(f"[webhook] Snapshot failed (non-fatal): {e}")
+
+                # 3. Backfill + grade
+                try:
+                    backfill()
+                    n_graded = grade_pending_picks(today)
+                    print(f"[webhook] Graded {n_graded} auto picks.")
+                    hist = load_historical_data()
+                    n_props = grade_props(hist, today)
+                    print(f"[webhook] Graded {n_props} historical props.")
+                except Exception as e:
+                    print(f"[webhook] Grade failed (non-fatal): {e}")
+
+                print("[webhook] Pipeline complete.")
+            except Exception as e:
+                print(f"[webhook] Pipeline error: {e}")
+                traceback.print_exc()
+
+        thread = threading.Thread(target=_webhook_background, daemon=True)
+        thread.start()
+        st.markdown("**Squeeze the Line — webhook triggered**")
+        st.success("Jobs started in the background. Check Streamlit Cloud logs for progress.")
         st.stop()
     else:
         st.error("Invalid refresh token.")
