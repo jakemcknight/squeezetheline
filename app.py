@@ -1342,7 +1342,7 @@ if cached is None:
 events, results, summaries = cached
 
 # --- Top navigation ---
-nav_options = ["Picks Board", "Auto Picks", "What-If"]
+nav_options = ["Picks Board", "Auto Picks", "What-If", "Performance"]
 if is_admin():
     nav_options.append("AI Analysis")
 if st.session_state.get("pick_tracking"):
@@ -1699,6 +1699,131 @@ if nav_choice == "What-If":
         "STL": st.column_config.NumberColumn(format="%.0f"),
         "BLK": st.column_config.NumberColumn(format="%.0f"),
     })
+
+    st.stop()
+
+
+if nav_choice == "Performance":
+    st.title("Performance Analytics")
+    st.caption(
+        "How the auto-picks system is actually doing. "
+        "ROI assumes standard -110 odds on every bet."
+    )
+
+    from performance import (
+        fetch_auto_picks_graded, fetch_historical_props,
+        summarize_picks, breakdown_by, summarize_historical_props,
+    )
+
+    range_opt = st.radio(
+        "Date range",
+        ["Last 7 days", "Last 30 days", "All time"],
+        horizontal=True,
+        key="perf_range",
+    )
+    date_from = None
+    if range_opt == "Last 7 days":
+        date_from = str(datetime.date.today() - datetime.timedelta(days=7))
+    elif range_opt == "Last 30 days":
+        date_from = str(datetime.date.today() - datetime.timedelta(days=30))
+
+    odds_price = st.number_input(
+        "Assumed price (American odds)", value=-110, step=5, key="perf_odds",
+        help="Most player props juice at -110 to -120. Change to see ROI at different prices.",
+    )
+
+    picks_df = fetch_auto_picks_graded(date_from=date_from)
+    props_df = fetch_historical_props(date_from=date_from)
+
+    # --- Auto Picks overall ---
+    st.subheader("Auto Picks overall")
+    summary = summarize_picks(picks_df, odds=int(odds_price))
+    if summary["bets"] == 0:
+        st.info("No graded auto picks yet for this range. Wait for games to finish.")
+    else:
+        m = st.columns(6)
+        m[0].metric("Graded bets", summary["bets"])
+        m[1].metric("Won", summary["won"])
+        m[2].metric("Lost", summary["lost"])
+        m[3].metric("Push", summary["push"])
+        m[4].metric("Win rate", f"{summary['win_rate']}%")
+        roi_delta = f"{summary['profit']:+.2f} profit"
+        m[5].metric("ROI", f"{summary['roi']}%", delta=roi_delta)
+        if summary["roi"] > 0:
+            st.success(f"Profitable at {int(odds_price)} odds.")
+        else:
+            st.warning(f"Not profitable at {int(odds_price)} odds.")
+
+    # --- Breakdowns ---
+    if not picks_df.empty:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**By stat**")
+            by_stat = breakdown_by(picks_df, "stat", odds=int(odds_price))
+            if not by_stat.empty:
+                st.dataframe(by_stat, use_container_width=True, hide_index=True,
+                             column_config={"roi": st.column_config.NumberColumn(format="%.1f%%")})
+        with c2:
+            st.markdown("**By side (over/under)**")
+            by_side = breakdown_by(picks_df, "side", odds=int(odds_price))
+            if not by_side.empty:
+                st.dataframe(by_side, use_container_width=True, hide_index=True,
+                             column_config={"roi": st.column_config.NumberColumn(format="%.1f%%")})
+
+        # Top-5 only breakdown
+        st.markdown("**Top 5 picks only vs all strong picks**")
+        top_only = picks_df[picks_df.get("is_top_pick", False) == True]  # noqa: E712
+        rest = picks_df[picks_df.get("is_top_pick", False) != True]  # noqa: E712
+        comp_rows = []
+        if not top_only.empty:
+            s = summarize_picks(top_only, odds=int(odds_price))
+            comp_rows.append({"bucket": "Top 5 of day", **s})
+        if not rest.empty:
+            s = summarize_picks(rest, odds=int(odds_price))
+            comp_rows.append({"bucket": "Rest of strong", **s})
+        if comp_rows:
+            st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
+
+        # Daily trend
+        st.markdown("**Daily hit rate**")
+        daily = picks_df.copy()
+        daily["win"] = (daily["result"] == "won").astype(int)
+        daily["bet"] = daily["result"].isin(["won", "lost"]).astype(int)
+        daily_agg = daily.groupby("date").agg(won=("win", "sum"), bets=("bet", "sum")).reset_index()
+        daily_agg = daily_agg[daily_agg["bets"] > 0]
+        if not daily_agg.empty:
+            daily_agg["win_rate"] = (daily_agg["won"] / daily_agg["bets"] * 100).round(1)
+            import altair as alt
+            chart = alt.Chart(daily_agg).mark_bar().encode(
+                x=alt.X("date:N", title="Date"),
+                y=alt.Y("win_rate:Q", title="Win rate (%)", scale=alt.Scale(domain=[0, 100])),
+                color=alt.condition(
+                    alt.datum.win_rate >= 52.4,  # break-even at -110
+                    alt.value("#22c55e"),
+                    alt.value("#ef4444"),
+                ),
+                tooltip=["date:N", "bets:Q", "won:Q", "win_rate:Q"],
+            ).properties(height=200)
+            breakeven = alt.Chart(pd.DataFrame({"y": [52.4]})).mark_rule(
+                color="white", strokeDash=[4, 4]
+            ).encode(y="y:Q")
+            st.altair_chart(chart + breakeven, use_container_width=True)
+            st.caption("Dashed line = break-even win rate at -110 odds (~52.4%).")
+
+    # --- Historical props (tracked lines) ---
+    st.divider()
+    st.subheader("Tracked book-line history")
+    st.caption("How often actual book lines resolved over vs. under across all tracked props.")
+    hsum = summarize_historical_props(props_df)
+    if hsum["total"] == 0:
+        st.info("No graded tracked props yet for this range.")
+    else:
+        m = st.columns(5)
+        m[0].metric("Graded lines", hsum["total"])
+        m[1].metric("Over", hsum["over"])
+        m[2].metric("Under", hsum["under"])
+        m[3].metric("Push", hsum["push"])
+        m[4].metric("Over rate", f"{hsum['over_rate']}%")
 
     st.stop()
 
