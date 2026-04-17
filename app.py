@@ -978,6 +978,53 @@ def render_player_detail(name: str, summaries: dict, results: dict):
     except Exception:
         pass
 
+    # --- ML model predictions (if models are trained) ---
+    try:
+        from model import predict_player_stat, load_model
+        ml_rows = []
+        for stat_key, label, _ in active_stats:
+            line = lines.get(stat_key)
+            if line is None:
+                continue
+            if load_model(stat_key) is None:
+                continue
+            recent = {
+                "avg_5": float(result_df.loc[result_df["name"] == name, f"{stat_key}_5g"].iloc[0])
+                    if (result_df := results.get(stat_key)) is not None and not result_df.empty and
+                    not result_df[result_df["name"] == name].empty and
+                    f"{stat_key}_5g" in result_df.columns else 0.0,
+            }
+            # Fill the other expected averages from what we have in season_avg
+            recent["avg_10"] = season_avg.get(stat_key, recent.get("avg_5", 0.0))
+            recent["avg_25"] = career_avg.get(stat_key, recent.get("avg_10", 0.0))
+            recent["min_avg_10"] = season_avg.get("minutes", 28.0)
+
+            pred = predict_player_stat(
+                player=name,
+                stat=stat_key,
+                opponent=opponent_code or "",
+                team=team or "",
+                home=True,  # default; don't know without game_loc for tonight
+                rest_days=int(summary.get("injury", {}).get("rest_days", 2) or 2),
+                recent_averages=recent,
+            )
+            if pred is not None:
+                delta = pred - line
+                ml_rows.append({
+                    "Stat": label, "Line": line, "Model prediction": round(pred, 1),
+                    "Delta": round(delta, 1),
+                    "Lean": "OVER" if delta > 0.5 else "UNDER" if delta < -0.5 else "NEUTRAL",
+                })
+        if ml_rows:
+            st.subheader("ML model prediction")
+            st.caption(
+                "XGBoost trained on 320k historical box scores. Takes player, "
+                "opponent, recent rolling averages, rest days, and home/away."
+            )
+            st.dataframe(pd.DataFrame(ml_rows), use_container_width=True, hide_index=True)
+    except Exception:
+        pass
+
     # --- Line movement today (if we've snapshotted multiple times) ---
     try:
         from prop_history import get_line_movement

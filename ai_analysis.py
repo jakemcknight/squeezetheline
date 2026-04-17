@@ -93,6 +93,28 @@ def build_context_block(player: str, stat: str, summary: dict, result_row: Optio
     except Exception:
         line_hist = {"available": False}
 
+    # Pull ML prediction if a model is trained
+    ml_block = ""
+    try:
+        from model import predict_player_stat, load_model
+        if load_model(stat) is not None:
+            recent = {
+                "avg_5": r.get(f"{stat}_5g") or 0.0,
+                "avg_10": r.get(f"{stat}_10g") or 0.0,
+                "avg_25": career_avg.get(stat) or 0.0,
+                "min_avg_10": season_avg.get("minutes") or 28.0,
+            }
+            pred = predict_player_stat(
+                player=player, stat=stat,
+                opponent=r.get("opponent", "") or "", team=team,
+                home=True, rest_days=int(r.get("rest_days") or 2),
+                recent_averages=recent,
+            )
+            if pred is not None:
+                ml_block = f"\n### ML model prediction\n- XGBoost prediction: {pred:.1f}\n"
+    except Exception:
+        pass
+
     line_history_block = ""
     if line_hist.get("available") and line_hist.get("all_games", 0) > 0:
         all_n = line_hist["all_games"]
@@ -148,7 +170,7 @@ def build_context_block(player: str, stat: str, summary: dict, result_row: Optio
 
 ### Trend indicator
 - Direction: {r.get('trend', 'n/a')} (up / down / flat based on last-5 vs last-10)
-{line_history_block}"""
+{line_history_block}{ml_block}"""
     return ctx
 
 
