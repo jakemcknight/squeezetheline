@@ -295,6 +295,38 @@ def render_auth_gate() -> bool:
     return False
 
 
+# --- Webhook endpoint for automated cron (no login required) ---
+# A free cron service like cron-job.org pings this URL on a schedule:
+#   https://squeezetheline.streamlit.app/?refresh_token=YOUR_SECRET
+# If the token matches, we run the daily jobs and stop — never rendering
+# the full app or requiring auth. Runs from Streamlit Cloud's IP so
+# NBA.com doesn't block it.
+_webhook_token = st.query_params.get("refresh_token")
+if _webhook_token:
+    _expected_token = ""
+    try:
+        _expected_token = st.secrets.get("REFRESH_TOKEN", "")
+    except Exception:
+        pass
+    if not _expected_token:
+        _expected_token = os.environ.get("REFRESH_TOKEN", "")
+
+    if _expected_token and _webhook_token == _expected_token:
+        st.markdown("**Squeeze the Line — automated refresh**")
+        from auto_runner import maybe_auto_refresh, maybe_auto_grade
+        with st.spinner("Running daily refresh..."):
+            refresh = maybe_auto_refresh()
+        st.write({"refresh": refresh})
+        with st.spinner("Grading pending picks..."):
+            grade = maybe_auto_grade()
+        st.write({"grade": grade})
+        st.success("Done.")
+        st.stop()
+    else:
+        st.error("Invalid refresh token.")
+        st.stop()
+
+
 if not render_auth_gate():
     st.stop()
 
