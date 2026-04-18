@@ -1563,7 +1563,7 @@ if "game_status" in _first_result.columns and not _first_result.empty:
     if parts:
         banner = "Game status: " + " · ".join(parts)
         if live or done:
-            banner += "  ·  *(toggle 'Include live / completed games' in the sidebar to see them)*"
+            banner += "  ·  *(toggle 'Show live games' / 'Show completed games' in the sidebar to see them)*"
             st.warning(banner)
         else:
             st.info(banner)
@@ -2581,11 +2581,16 @@ with st.sidebar:
         help="Ruled-out and doubtful players are hidden by default — they skew picks since they won't play.",
     )
 
-    include_live = st.checkbox(
-        "Include live / completed games",
+    st.markdown("**Game status filters**")
+    show_live = st.checkbox(
+        "Show live games",
         value=False,
-        help="Games that have already tipped off return live (in-game) lines that don't reflect "
-             "the pre-game line. These are hidden by default.",
+        help="Games currently in progress. Live lines shift during the game and aren't pre-game lines.",
+    )
+    show_completed = st.checkbox(
+        "Show completed games",
+        value=False,
+        help="Games that have already finished. Kept hidden by default since you can't bet them anymore.",
     )
 
 # --- Apply filters ---
@@ -2605,9 +2610,14 @@ if not include_inactive and "status_short" in filtered.columns:
     inactive_codes = {"OUT", "DBT"}
     filtered = filtered[~filtered["status_short"].fillna("").isin(inactive_codes)]
 
-# Auto-hide live / completed games (lines aren't pre-game) unless the user opts in
-if not include_live and "game_status" in filtered.columns:
-    filtered = filtered[filtered["game_status"].isin(["pregame", "unknown"])]
+# Respect the per-status toggles
+if "game_status" in filtered.columns:
+    allowed = {"pregame", "unknown"}
+    if show_live:
+        allowed.add("live")
+    if show_completed:
+        allowed.add("completed")
+    filtered = filtered[filtered["game_status"].isin(allowed)]
 
 # --- Display columns (only show what exists) ---
 show_cols = [c for c in DISPLAY_COLS if c in filtered.columns]
