@@ -1509,6 +1509,30 @@ if cached is None:
 
 events, results, summaries = cached
 
+
+# Recompute game_status in every result DataFrame against the CURRENT time
+# (the cached value is fixed at refresh time and would be stale).
+def _now_status(tipoff_iso: str) -> str:
+    if not tipoff_iso:
+        return "unknown"
+    try:
+        tipoff = pd.Timestamp(tipoff_iso)
+        if tipoff.tzinfo is None:
+            tipoff = tipoff.tz_localize("UTC")
+        now = pd.Timestamp.now(tz="UTC")
+        if now < tipoff:
+            return "pregame"
+        if now < tipoff + pd.Timedelta(hours=3):
+            return "live"
+        return "completed"
+    except Exception:
+        return "unknown"
+
+
+for _df in results.values():
+    if "tipoff" in _df.columns:
+        _df["game_status"] = _df["tipoff"].apply(_now_status)
+
 # --- Top navigation ---
 nav_options = ["Picks Board", "Auto Picks", "What-If", "Performance"]
 if is_admin():
