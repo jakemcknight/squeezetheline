@@ -633,7 +633,13 @@ def show_table(df: pd.DataFrame, key: str):
         )
     if event.selection.rows:
         idx = event.selection.rows[0]
-        st.session_state["selected_player"] = df.iloc[idx]["name"]
+        player_name = df.iloc[idx]["name"]
+        st.session_state["selected_player"] = player_name
+        try:
+            from activity import log, ACTION_PLAYER_VIEW
+            log(ACTION_PLAYER_VIEW, {"player": player_name})
+        except Exception:
+            pass
         st.rerun()
 
 
@@ -718,6 +724,11 @@ def show_cards(df: pd.DataFrame, key: str):
                 )
             if st.button("View detail", key=f"{key}_card_{idx}", use_container_width=True):
                 st.session_state["selected_player"] = name
+                try:
+                    from activity import log, ACTION_PLAYER_VIEW
+                    log(ACTION_PLAYER_VIEW, {"player": name, "via": "card"})
+                except Exception:
+                    pass
                 st.rerun()
 
 
@@ -918,6 +929,11 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                                 team=summary.get("team", ""),
                                 opponent=summary.get("opponent", "") if isinstance(summary.get("opponent", ""), str) else "",
                             )
+                            try:
+                                from activity import log, ACTION_SAVE_PICK
+                                log(ACTION_SAVE_PICK, {"player": name, "stat": stat_key, "side": "over", "line": line})
+                            except Exception:
+                                pass
                             st.toast(f"Saved: {name} OVER {line} {label}")
                     with btn_cols[1]:
                         if st.button(f"Under", key=f"pick_under_{stat_key}", use_container_width=True):
@@ -927,6 +943,11 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                                 team=summary.get("team", ""),
                                 opponent=summary.get("opponent", "") if isinstance(summary.get("opponent", ""), str) else "",
                             )
+                            try:
+                                from activity import log, ACTION_SAVE_PICK
+                                log(ACTION_SAVE_PICK, {"player": name, "stat": stat_key, "side": "under", "line": line})
+                            except Exception:
+                                pass
                             st.toast(f"Saved: {name} UNDER {line} {label}")
 
     # --- Tracked book-line history (only after we've accumulated some) ---
@@ -1492,6 +1513,7 @@ events, results, summaries = cached
 nav_options = ["Picks Board", "Auto Picks", "What-If", "Performance"]
 if is_admin():
     nav_options.append("AI Analysis")
+    nav_options.append("Analytics")
 if st.session_state.get("pick_tracking"):
     nav_options.append("My Picks")
 
@@ -1514,6 +1536,12 @@ nav_choice = st.radio(
 if st.session_state.get("_last_nav") != nav_choice:
     st.session_state["_last_nav"] = nav_choice
     st.session_state.pop("selected_player", None)
+    # Log the nav change for activity tracking
+    try:
+        from activity import log, ACTION_PAGE_VIEW
+        log(ACTION_PAGE_VIEW, {"tab": nav_choice})
+    except Exception:
+        pass
 
 st.divider()
 
@@ -2000,6 +2028,86 @@ if nav_choice == "Performance":
     st.stop()
 
 
+if nav_choice == "Analytics" and is_admin():
+    st.title("Analytics")
+    st.caption("Who's using the platform, when, and what they're doing.")
+
+    from activity import (
+        fetch_activity_since, fetch_recent_activity,
+        summarize, dau_series, per_user_summary,
+    )
+
+    range_opt = st.radio(
+        "Range",
+        ["Last 7 days", "Last 30 days", "Last 90 days"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="analytics_range",
+    )
+    days = {"Last 7 days": 7, "Last 30 days": 30, "Last 90 days": 90}[range_opt]
+    activity_df = fetch_activity_since(days=days)
+
+    summary = summarize(activity_df)
+    if summary["events"] == 0:
+        st.info("No activity yet in this range. Events will start recording after the next sign-in / page load.")
+        st.stop()
+
+    m = st.columns(5)
+    m[0].metric("Total events", summary["events"])
+    m[1].metric("Unique users", summary["unique_users"])
+    m[2].metric("Logins", summary["logins"])
+    m[3].metric("Player views", summary["player_views"])
+    m[4].metric("AI queries", summary["ai_queries"])
+
+    # DAU chart
+    st.subheader("Daily active users")
+    dau = dau_series(activity_df)
+    if not dau.empty:
+        import altair as alt
+        chart = alt.Chart(dau).mark_bar(color="#22c55e").encode(
+            x=alt.X("date:T", title=None),
+            y=alt.Y("dau:Q", title="Distinct users"),
+            tooltip=["date:T", "dau:Q"],
+        ).properties(height=220)
+        st.altair_chart(chart, use_container_width=True)
+
+    # Per-user breakdown
+    st.subheader("Per-user breakdown")
+    per_user = per_user_summary(activity_df)
+    if not per_user.empty:
+        st.dataframe(
+            per_user,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "user_email": "Email",
+                "events": "Events",
+                "active_days": "Active days",
+                "last_seen": "Last seen",
+                "first_seen": "First seen",
+            },
+        )
+
+    # Recent activity feed
+    st.subheader("Recent events")
+    recent = fetch_recent_activity(limit=200)
+    if not recent.empty:
+        display = recent[["created_at", "user_email", "action", "details"]].copy()
+        display["created_at"] = pd.to_datetime(display["created_at"]).dt.strftime("%Y-%m-%d %H:%M UTC")
+        # Turn details JSON into a readable string
+        display["details"] = display["details"].apply(
+            lambda d: ", ".join(f"{k}={v}" for k, v in (d or {}).items()) if isinstance(d, dict) else str(d)
+        )
+        st.dataframe(display, use_container_width=True, hide_index=True, column_config={
+            "created_at": "When",
+            "user_email": "User",
+            "action": "Action",
+            "details": "Details",
+        })
+
+    st.stop()
+
+
 if nav_choice == "AI Analysis" and is_admin():
     st.title("AI Prop Analysis")
     st.caption(
@@ -2069,6 +2177,14 @@ if nav_choice == "AI Analysis" and is_admin():
                 summary=summaries.get(ai_player, {}),
                 result_row=result_row,
             )
+            try:
+                from activity import log, ACTION_AI_ANALYSIS
+                log(ACTION_AI_ANALYSIS, {
+                    "player": ai_player, "stat": ai_stat,
+                    "line": float(ai_line), "side": ai_side.lower(),
+                })
+            except Exception:
+                pass
 
         if "error" in resp:
             st.error(resp["error"])
@@ -2439,6 +2555,11 @@ with st.sidebar:
     )
     if picked:
         st.session_state["selected_player"] = picked
+        try:
+            from activity import log, ACTION_PLAYER_VIEW
+            log(ACTION_PLAYER_VIEW, {"player": picked, "via": "search"})
+        except Exception:
+            pass
         st.rerun()
 
     st.header("Filters")

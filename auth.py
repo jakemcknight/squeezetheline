@@ -96,6 +96,12 @@ def sign_in(email: str, password: str) -> tuple[bool, str]:
             "access_token": resp.session.access_token if resp.session else None,
             "refresh_token": resp.session.refresh_token if resp.session else None,
         }
+        # Log the login event (fire-and-forget)
+        try:
+            from activity import log, ACTION_LOGIN
+            log(ACTION_LOGIN, user=st.session_state["sb_user"])
+        except Exception:
+            pass
         return True, "Signed in."
     except Exception as e:
         return False, f"Sign in failed: {e}"
