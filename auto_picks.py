@@ -73,6 +73,41 @@ def _composite_score(row, side: str) -> float:
 
 
 def _build_pick(row, side: str, stat_key: str, game_date: datetime.date, is_top: bool) -> dict:
+    # Best-effort ML prediction (skips silently if model not trained)
+    ml_pred = None
+    try:
+        from model import predict_player_stat, load_model
+        if load_model(stat_key) is not None:
+            recent = {
+                "avg_5": float(row.get(f"{stat_key}_5g") or 0),
+                "avg_10": float(row.get(f"{stat_key}_10g") or 0),
+                "avg_25": float(row.get(stat_key) or 0),
+                "min_avg_10": 28.0,
+            }
+            pred = predict_player_stat(
+                player=row["name"], stat=stat_key,
+                opponent=row.get("opponent", "") or "",
+                team=row.get("team-code", "") or "",
+                home=True, rest_days=int(row.get("rest_days") or 2),
+                recent_averages=recent,
+            )
+            if pred is not None:
+                ml_pred = float(pred)
+    except Exception:
+        pass
+
+    def _safe_int(v):
+        try:
+            return int(v) if v is not None and not (isinstance(v, float) and pd.isna(v)) else None
+        except Exception:
+            return None
+
+    def _safe_float(v):
+        try:
+            return float(v) if v is not None and not (isinstance(v, float) and pd.isna(v)) else None
+        except Exception:
+            return None
+
     return {
         "date": str(game_date),
         "player": row["name"],
@@ -82,8 +117,12 @@ def _build_pick(row, side: str, stat_key: str, game_date: datetime.date, is_top:
         "team": row.get("team-code", ""),
         "opponent": row.get("opponent", ""),
         "delta": float(row.get("delta", 0) or 0),
+        "delta_10g": _safe_float(row.get("delta_10g")),
         "hit_pct": float(row.get("hit%", 0) or 0),
         "history_hit_pct": float(row.get("history_hit%", 0) or 0),
+        "def_rank": _safe_int(row.get("rank")),
+        "vs_opp_career": row.get("vs_opp_career", "") or "",
+        "ml_prediction": ml_pred,
         "score": float(_composite_score(row, side)),
         "is_top_pick": bool(is_top),
         "actual": None,
