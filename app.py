@@ -312,72 +312,104 @@ if _webhook_token:
         _expected_token = os.environ.get("REFRESH_TOKEN", "")
 
     if _expected_token and _webhook_token == _expected_token:
-        # Fire-and-forget: start the heavy work in a background thread
-        # so we can return a 200 within the cron service's timeout (30s).
-        # The thread runs in the same Streamlit Cloud process and keeps
-        # going even after this script run ends.
         import threading
+        import datetime as _dt
+        import traceback as _tb
 
-        def _webhook_background():
-            """Runs the full daily pipeline without Streamlit session context."""
-            import traceback
+        debug_mode = st.query_params.get("debug") in ("1", "true", "yes")
+
+        def _run_pipeline(report: dict):
+            """Runs the full daily pipeline. Writes per-step status into `report`."""
             try:
-                from auto_picks import generate_and_save_picks
+                from auto_picks import generate_and_save_picks, grade_pending_picks
                 from scrapers.odds_api import get_all_props
                 from data import prepare_props, load_historical_data
-                from prop_history import snapshot_props, grade_props
-                from auto_picks import grade_pending_picks
+                from prop_history import snapshot_props, grade_props, snapshot_line_movement
                 from backfill import backfill
-                import datetime as _dt
 
                 today = _dt.date.today()
+                report["date"] = str(today)
                 print(f"[webhook] Starting daily pipeline for {today}...")
 
-                # 1. Generate auto picks
-                n_picks = generate_and_save_picks(today)
-                print(f"[webhook] Generated {n_picks} auto picks.")
+                # Config sanity
+                srv_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "")
+                report["service_role_key_present"] = bool(srv_key)
+                if not srv_key:
+                    report["error"] = "SUPABASE_SERVICE_ROLE_KEY missing — nothing can be written to Supabase."
+                    return
 
-                # 2. Snapshot every prop line (once-per-day grading table)
-                #    AND capture line movement (append-only timeseries table)
+                # 1. Generate auto picks
                 try:
-                    from prop_history import snapshot_line_movement
+                    n_picks = generate_and_save_picks(today)
+                    report["picks_saved"] = n_picks
+                    print(f"[webhook] Generated {n_picks} auto picks.")
+                except Exception as e:
+                    report["picks_error"] = f"{type(e).__name__}: {e}"
+                    print(f"[webhook] Picks failed: {e}"); _tb.print_exc()
+
+                # 2. Snapshot + line movement
+                try:
                     raw_props = get_all_props(today)
                     tidy = prepare_props(raw_props)
+                    report["props_fetched"] = len(tidy)
                     n_snap = snapshot_props(today, tidy)
                     n_move = snapshot_line_movement(today, tidy)
+                    report["snapshots"] = n_snap
+                    report["line_movement_rows"] = n_move
                     print(f"[webhook] Snapshotted {n_snap} props / {n_move} movement rows.")
                 except Exception as e:
-                    print(f"[webhook] Snapshot failed (non-fatal): {e}")
+                    report["snapshot_error"] = f"{type(e).__name__}: {e}"
+                    print(f"[webhook] Snapshot failed: {e}"); _tb.print_exc()
 
                 # 3. Backfill + grade
                 try:
                     backfill()
                     n_graded = grade_pending_picks(today)
-                    print(f"[webhook] Graded {n_graded} auto picks.")
                     hist = load_historical_data()
                     n_props = grade_props(hist, today)
-                    print(f"[webhook] Graded {n_props} historical props.")
+                    report["picks_graded"] = n_graded
+                    report["props_graded"] = n_props
+                    print(f"[webhook] Graded {n_graded} picks / {n_props} props.")
                 except Exception as e:
-                    print(f"[webhook] Grade failed (non-fatal): {e}")
+                    report["grade_error"] = f"{type(e).__name__}: {e}"
+                    print(f"[webhook] Grade failed: {e}"); _tb.print_exc()
 
-                # 4. Post the daily digest (Discord webhook + on-site card)
+                # 4. Digest
                 try:
                     from digest import send_daily_digest
                     res = send_daily_digest(today)
-                    print(f"[webhook] Digest: {res['picks']} picks, discord_sent={res['discord_sent']}")
+                    report["digest_picks"] = res.get("picks", 0)
+                    report["digest_email_sent"] = res.get("email_sent", False)
+                    if res.get("skipped_reason"):
+                        report["digest_skipped_reason"] = res["skipped_reason"]
                 except Exception as e:
-                    print(f"[webhook] Digest failed (non-fatal): {e}")
+                    report["digest_error"] = f"{type(e).__name__}: {e}"
 
+                report["status"] = "ok"
                 print("[webhook] Pipeline complete.")
             except Exception as e:
-                print(f"[webhook] Pipeline error: {e}")
-                traceback.print_exc()
+                report["fatal_error"] = f"{type(e).__name__}: {e}"
+                _tb.print_exc()
 
-        thread = threading.Thread(target=_webhook_background, daemon=True)
-        thread.start()
-        st.markdown("**Squeeze the Line — webhook triggered**")
-        st.success("Jobs started in the background. Check Streamlit Cloud logs for progress.")
-        st.stop()
+        if debug_mode:
+            # Run synchronously and show the full report on-screen
+            report = {}
+            with st.spinner("Running pipeline synchronously (debug mode)..."):
+                _run_pipeline(report)
+            st.markdown("**Squeeze the Line — debug webhook**")
+            st.json(report)
+            st.stop()
+        else:
+            # Fire-and-forget background thread for scheduled cron pings
+            report = {}
+            thread = threading.Thread(target=_run_pipeline, args=(report,), daemon=True)
+            thread.start()
+            st.markdown("**Squeeze the Line — webhook triggered**")
+            st.success(
+                "Jobs started in the background. "
+                "Add `&debug=1` to the URL to run synchronously and see the full report here."
+            )
+            st.stop()
     else:
         st.error("Invalid refresh token.")
         st.stop()
@@ -2233,12 +2265,44 @@ if nav_choice == "Auto Picks":
         with st.expander("Admin tools"):
             from auto_runner import maybe_auto_refresh, maybe_auto_grade
             from auto_picks import get_admin_client
+            from auth import get_supabase
             import os as _os
+
             srv = _os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "")
+            refresh_tok = _os.environ.get("REFRESH_TOKEN") or st.secrets.get("REFRESH_TOKEN", "")
+            odds_key = _os.environ.get("ODDS_API_KEY") or st.secrets.get("ODDS_API_KEY", "")
+
+            # Count total auto_picks rows + most recent date
+            latest_date = None
+            total_picks = 0
+            try:
+                sb_read = get_supabase()
+                if sb_read:
+                    resp = sb_read.table("auto_picks").select("date", count="exact").order("date", desc=True).limit(1).execute()
+                    total_picks = resp.count or 0
+                    if resp.data:
+                        latest_date = resp.data[0].get("date")
+            except Exception as e:
+                st.warning(f"Couldn't query auto_picks: {e}")
+
             st.write({
                 "service_role_key_present": bool(srv),
-                "last_job_status": st.session_state.get("_last_job_status", "not yet attempted this session"),
+                "refresh_token_present": bool(refresh_tok),
+                "odds_api_key_present": bool(odds_key),
+                "total_auto_picks_rows_in_supabase": total_picks,
+                "most_recent_picks_date": latest_date,
+                "last_job_status_this_session": st.session_state.get("_last_job_status", "not yet attempted this session"),
             })
+
+            st.markdown(
+                "**Test the webhook synchronously** (shows exactly what happens, step by step):"
+            )
+            if refresh_tok:
+                debug_url = f"?refresh_token={refresh_tok}&debug=1"
+                st.code(debug_url, language="text")
+                st.caption("Append this to your app URL to run the pipeline synchronously and see every step's result.")
+            else:
+                st.warning("REFRESH_TOKEN not set — webhook won't work until you add it to secrets.")
             col_a, col_b = st.columns(2)
             with col_a:
                 if st.button("Generate today's auto-picks now", use_container_width=True):
