@@ -70,7 +70,10 @@ def pull_season(season: str) -> pd.DataFrame:
             wait = 5 * attempt
             print(f"  nba_api attempt {attempt} failed ({type(e).__name__}); retrying in {wait}s...")
             time.sleep(wait)
-    raw = log.get_data_frames()[0]
+    # Use get_dict() instead of get_data_frames() — the latter triggers a
+    # numpy memory error on Streamlit Cloud / pandas 3.x for large responses.
+    data = log.get_dict()["resultSets"][0]
+    raw = pd.DataFrame(data["rowSet"], columns=data["headers"])
 
     df = pd.DataFrame()
     df["player"] = raw["PLAYER_NAME"]

@@ -363,7 +363,17 @@ if _webhook_token:
 
                 # 3. Backfill + grade (with diagnostics)
                 try:
-                    backfill()
+                    # Capture backfill stdout so silent failures show up in the report
+                    from io import StringIO
+                    from contextlib import redirect_stdout
+                    buf = StringIO()
+                    try:
+                        with redirect_stdout(buf):
+                            backfill()
+                    finally:
+                        out = buf.getvalue()
+                        # Just keep the last ~2KB so the report stays readable
+                        report["backfill_log_tail"] = out[-2000:] if out else ""
                     hist = load_historical_data()
                     if not hist.empty:
                         report["historical_rows"] = len(hist)
