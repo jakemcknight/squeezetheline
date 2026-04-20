@@ -361,11 +361,50 @@ if _webhook_token:
                     report["snapshot_error"] = f"{type(e).__name__}: {e}"
                     print(f"[webhook] Snapshot failed: {e}"); _tb.print_exc()
 
-                # 3. Backfill + grade
+                # 3. Backfill + grade (with diagnostics)
                 try:
                     backfill()
-                    n_graded = grade_pending_picks(today)
                     hist = load_historical_data()
+                    if not hist.empty:
+                        report["historical_rows"] = len(hist)
+                        # What's the most recent date in our box-score data?
+                        if "date_string" in hist.columns:
+                            try:
+                                latest = hist["date_string"].dropna().max()
+                                report["historical_latest_date"] = str(latest)
+                            except Exception:
+                                pass
+                    else:
+                        report["historical_rows"] = 0
+
+                    # Look at the pending picks: how many, what dates, do those
+                    # dates exist in historical data?
+                    from auto_runner import _supabase_admin
+                    sb_diag = _supabase_admin()
+                    if sb_diag:
+                        pend = sb_diag.table("auto_picks").select("date,player").eq("result", "pending").lte("date", str(today)).limit(500).execute()
+                        pending_rows = pend.data or []
+                        report["pending_picks_count"] = len(pending_rows)
+                        if pending_rows:
+                            pending_dates = sorted(set(r["date"] for r in pending_rows))
+                            report["pending_pick_dates"] = pending_dates[:10]
+                            # Of those dates, how many are present in historical data?
+                            if not hist.empty and "date_string" in hist.columns:
+                                hist_dates = set(hist["date_string"].dropna().astype(str).unique())
+                                missing = [d for d in pending_dates if d not in hist_dates]
+                                report["pending_dates_missing_from_history"] = missing[:10]
+                            # Sample one pending pick + does its (player, date) exist in history?
+                            sample = pending_rows[0]
+                            report["sample_pending_pick"] = sample
+                            if not hist.empty:
+                                hist_renamed = hist.rename(columns={"player": "name"}) if "player" in hist.columns else hist
+                                match = hist_renamed[
+                                    (hist_renamed.get("name", hist_renamed.get("player")) == sample["player"])
+                                    & (hist_renamed["date_string"].astype(str) == sample["date"])
+                                ]
+                                report["sample_pending_pick_found_in_history"] = len(match) > 0
+
+                    n_graded = grade_pending_picks(today)
                     n_props = grade_props(hist, today)
                     report["picks_graded"] = n_graded
                     report["props_graded"] = n_props
