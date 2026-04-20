@@ -44,36 +44,50 @@ def extract_opponent(matchup: str, team_abbr: str) -> str:
     return ""
 
 
-def pull_season(season: str) -> pd.DataFrame:
-    """
-    Pull all player game logs for a single NBA season.
-
-    Returns a DataFrame with columns matching the existing historical_data.csv
-    format so old NatStat data and new nba_api data can coexist.
-    """
-    # NBA.com sometimes times out from cloud IPs (GitHub Actions etc.)
-    # Retry a few times with backoff before giving up.
-    last_err = None
+def _pull_one_season_type(season: str, season_type: str) -> pd.DataFrame:
+    """Pull a single (season, season_type) combo with retries."""
     for attempt in range(1, 6):
         try:
             log = LeagueGameLog(
                 season=season,
-                season_type_all_star="Regular Season",
+                season_type_all_star=season_type,
                 player_or_team_abbreviation="P",
                 timeout=90,
             )
             break
         except Exception as e:
-            last_err = e
             if attempt == 5:
                 raise
             wait = 5 * attempt
             print(f"  nba_api attempt {attempt} failed ({type(e).__name__}); retrying in {wait}s...")
             time.sleep(wait)
-    # Use get_dict() instead of get_data_frames() — the latter triggers a
-    # numpy memory error on Streamlit Cloud / pandas 3.x for large responses.
     data = log.get_dict()["resultSets"][0]
-    raw = pd.DataFrame(data["rowSet"], columns=data["headers"])
+    return pd.DataFrame(data["rowSet"], columns=data["headers"])
+
+
+def pull_season(season: str) -> pd.DataFrame:
+    """
+    Pull all player game logs for a single NBA season — regular season,
+    play-in tournament, AND playoffs combined.
+
+    Returns a DataFrame with columns matching the existing historical_data.csv
+    format so old NatStat data and new nba_api data can coexist.
+    """
+    parts = []
+    # Note: PlayIn only exists for 2020-21 onwards
+    for season_type in ("Regular Season", "PlayIn", "Playoffs"):
+        try:
+            df = _pull_one_season_type(season, season_type)
+            if not df.empty:
+                print(f"    {season_type}: {len(df)} rows / {df['GAME_DATE'].nunique()} dates")
+                parts.append(df)
+        except Exception as e:
+            # Some season types don't exist for older seasons; that's fine
+            print(f"    {season_type}: skipped ({type(e).__name__})")
+            continue
+    if not parts:
+        return pd.DataFrame()
+    raw = pd.concat(parts, ignore_index=True)
 
     df = pd.DataFrame()
     df["player"] = raw["PLAYER_NAME"]

@@ -66,21 +66,35 @@ def _extract_opponent(matchup: str, team_abbr: str) -> str:
 
 def get_current_season_stats() -> pd.DataFrame:
     """
-    Fetch all player game logs for the current NBA season.
+    Fetch all player game logs for the current NBA season — combining
+    Regular Season, Play-In Tournament, and Playoffs so analytics still
+    work after the regular season ends in mid-April.
 
     Returns a DataFrame with columns matching what the analysis pipeline
     expects: name, team-code, gameday, minutes, points, rebounds, assists.
     """
     season = f"{SEASON_YEAR - 1}-{str(SEASON_YEAR)[-2:]}"
-    log = _with_retries(
-        LeagueGameLog,
-        season=season,
-        season_type_all_star="Regular Season",
-        player_or_team_abbreviation="P",
-        timeout=NBA_TIMEOUT,
-    )
-    data = log.get_dict()["resultSets"][0]
-    raw = pd.DataFrame(data["rowSet"], columns=data["headers"])
+    parts = []
+    for season_type in ("Regular Season", "PlayIn", "Playoffs"):
+        try:
+            log = _with_retries(
+                LeagueGameLog,
+                season=season,
+                season_type_all_star=season_type,
+                player_or_team_abbreviation="P",
+                timeout=NBA_TIMEOUT,
+            )
+            data = log.get_dict()["resultSets"][0]
+            df_part = pd.DataFrame(data["rowSet"], columns=data["headers"])
+            if not df_part.empty:
+                parts.append(df_part)
+        except Exception as e:
+            # Some types may not exist for the season yet
+            print(f"  get_current_season_stats: skipped {season_type} ({type(e).__name__})")
+            continue
+    if not parts:
+        return pd.DataFrame()
+    raw = pd.concat(parts, ignore_index=True)
 
     df = pd.DataFrame()
     df["name"] = raw["PLAYER_NAME"]
