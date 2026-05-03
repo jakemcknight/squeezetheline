@@ -222,6 +222,35 @@ def analyze_stat(
 
     stat_props["last10_hits"] = stat_props.apply(_hit_squares, axis=1)
 
+    # --- Composite confidence score (0-100) per player ---
+    # Combines: avg delta strength, hit-rate edge from 50%, history hit-rate
+    # edge, sample size, and (when present) defensive matchup quality.
+    def _score(row) -> float:
+        d = abs(row.get("delta", 0) or 0)
+        d5 = abs(row.get(f"{stat}_5g", 0) - row.get("spread", 0)) if pd.notna(row.get(f"{stat}_5g")) else 0
+        d10 = abs(row.get(f"{stat}_10g", 0) - row.get("spread", 0)) if pd.notna(row.get(f"{stat}_10g")) else 0
+        # Avg deltas — bigger gap from line is stronger signal
+        delta_pts = min(40, (d + d5 + d10) * 4)  # 40 pt cap
+        # Hit rate edge from 50% (current season)
+        hit = row.get("hit%") or 50
+        hit_pts = min(25, abs(hit - 50) * 0.5)
+        # Historical hit rate edge
+        hist = row.get("history_hit%") or 50
+        hist_pts = min(20, abs(hist - 50) * 0.4)
+        # Defense rank bonus — higher rank = weaker defense, helps overs
+        rank = row.get("rank")
+        def_pts = 0
+        if pd.notna(rank):
+            # Rank 1 = best D (favors under), 30 = worst (favors over)
+            d_signed = (row.get("delta", 0) or 0)
+            if d_signed > 0:  # over leaning, want high rank
+                def_pts = min(15, max(0, (rank - 15)) * 0.5)
+            elif d_signed < 0:  # under leaning, want low rank
+                def_pts = min(15, max(0, (15 - rank)) * 0.5)
+        return round(min(100.0, delta_pts + hit_pts + hist_pts + def_pts), 1)
+
+    stat_props["confidence"] = stat_props.apply(_score, axis=1)
+
     # --- Trend indicator: is the last-5 avg above or below the last-10 avg? ---
     stat_props["trend"] = stat_props.apply(
         lambda r: (

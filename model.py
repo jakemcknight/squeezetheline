@@ -184,6 +184,44 @@ def predict_player_stat(
     return pred
 
 
+def predict_over_probability(
+    player: str, stat: str, line: float, opponent: str, team: str,
+    home: bool = True, rest_days: int = 2,
+    recent_averages: Optional[dict] = None,
+) -> Optional[float]:
+    """Estimate P(player_stat > line) using the regression model + an
+    empirical residual std-dev derived at training time.
+
+    We model the prediction as: actual ~ Normal(predicted, sigma)
+    where sigma = MAE / 0.7979 (MAE-to-std conversion for normal dist).
+    Then P(actual > line) = 1 - Phi((line - predicted) / sigma).
+
+    This isn't a true classifier (which would need re-training on
+    threshold-crossing labels), but it's a solid first-pass that uses
+    our existing model. Returns a value in [0, 1] or None if no model.
+    """
+    pred = predict_player_stat(
+        player=player, stat=stat, opponent=opponent, team=team,
+        home=home, rest_days=rest_days, recent_averages=recent_averages,
+    )
+    if pred is None:
+        return None
+    metrics = get_model_metrics(stat)
+    if not metrics:
+        return None
+    mae = metrics.get("mae")
+    if not mae or mae <= 0:
+        return None
+    # Convert MAE to standard deviation assuming normal residuals
+    sigma = mae / 0.7979
+    # Normal CDF without scipy
+    import math
+    z = (line - pred) / sigma
+    # 1 - Phi(z) = P(actual > line)
+    p_over = 1.0 - 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+    return max(0.0, min(1.0, float(p_over)))
+
+
 def get_model_metrics(stat: str) -> Optional[dict]:
     """Return the metrics saved at training time, if available."""
     path = os.path.join(MODEL_DIR, f"{stat}_metrics.json")
