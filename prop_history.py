@@ -90,6 +90,60 @@ def snapshot_line_movement(game_date: datetime.date, props_df: pd.DataFrame, boo
     return len(rows)
 
 
+def get_significant_line_moves(game_date: datetime.date,
+                               min_move: float = 1.5,
+                               book: str = "draftkings") -> list[dict]:
+    """Return all (player, stat) combos where today's line has moved at least
+    `min_move` from its first snapshot.
+
+    Each entry: {player, stat, open_line, current_line, delta, snapshots_count}.
+    """
+    sb = _anon_client()
+    if sb is None:
+        return []
+    try:
+        resp = (
+            sb.table("line_snapshots")
+            .select("player, stat, line, snapshot_at")
+            .eq("date", str(game_date))
+            .eq("book", book)
+            .order("snapshot_at", desc=False)
+            .limit(20000)
+            .execute()
+        )
+        rows = resp.data or []
+    except Exception:
+        return []
+
+    # Group by (player, stat) and compute open vs latest
+    moves = {}
+    for r in rows:
+        key = (r["player"], r["stat"])
+        if key not in moves:
+            moves[key] = {"open": float(r["line"]), "latest": float(r["line"]), "count": 1}
+        else:
+            moves[key]["latest"] = float(r["line"])
+            moves[key]["count"] += 1
+
+    big = []
+    for (player, stat), data in moves.items():
+        if data["count"] < 2:
+            continue
+        delta = data["latest"] - data["open"]
+        if abs(delta) >= min_move:
+            big.append({
+                "player": player,
+                "stat": stat,
+                "open_line": data["open"],
+                "current_line": data["latest"],
+                "delta": round(delta, 1),
+                "snapshots_count": data["count"],
+            })
+    # Sort by abs delta descending
+    big.sort(key=lambda m: abs(m["delta"]), reverse=True)
+    return big
+
+
 def get_line_movement(player: str, stat: str, game_date: datetime.date, book: str = "draftkings") -> list[dict]:
     """Return all snapshots for this player/stat on this date, ordered by time."""
     sb = _anon_client()

@@ -434,6 +434,16 @@ if _webhook_token:
                 except Exception as e:
                     report["digest_error"] = f"{type(e).__name__}: {e}"
 
+                # 5. Priority alerts (line movement + high-EV)
+                try:
+                    from alerts import send_priority_alerts
+                    alert_res = send_priority_alerts(today)
+                    report["alerts_sent"] = alert_res.get("sent", False)
+                    report["alerts_moves"] = alert_res.get("moves", 0)
+                    report["alerts_high_ev"] = alert_res.get("high_ev", 0)
+                except Exception as e:
+                    report["alerts_error"] = f"{type(e).__name__}: {e}"
+
                 report["status"] = "ok"
                 print("[webhook] Pipeline complete.")
             except Exception as e:
@@ -1339,8 +1349,42 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                     unsafe_allow_html=True,
                 )
 
-    # --- Line shopping (when multi-book data is present) ---
+    # --- Sharp-book divergence (when multi-book data is present) ---
     all_books = summary.get("all_books")
+    if all_books:
+        # Pinnacle isn't in The Odds API's US region, but we can approximate
+        # "sharp signal" by flagging props where the spread of lines across
+        # books is wide — sharps tend to disagree with public books.
+        st.subheader("Cross-book divergence")
+        st.caption(
+            "Wide spreads across books usually mean the market hasn't settled — "
+            "often a sign sharps are moving lines on one side."
+        )
+        ab_df = pd.DataFrame(all_books)
+        div_rows = []
+        for prop_type, group in ab_df.groupby("type"):
+            if len(group) < 2:
+                continue
+            spread = group["spread"].max() - group["spread"].min()
+            if spread >= 0.5:
+                min_book = group.loc[group["spread"].idxmin(), "book"]
+                max_book = group.loc[group["spread"].idxmax(), "book"]
+                div_rows.append({
+                    "Stat": prop_type,
+                    "Range": f"{group['spread'].min():.1f} – {group['spread'].max():.1f}",
+                    "Spread": f"{spread:.1f}",
+                    "Lowest": f"{min_book} ({group['spread'].min():.1f})",
+                    "Highest": f"{max_book} ({group['spread'].max():.1f})",
+                    "Books": len(group),
+                })
+        if div_rows:
+            _, dv_mid, _ = st.columns([1, 4, 1])
+            with dv_mid:
+                st.dataframe(pd.DataFrame(div_rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No significant cross-book divergence on this slate.")
+
+    # --- Line shopping (when multi-book data is present) ---
     if all_books:
         st.subheader("Line Shopping")
         st.caption("Best line per stat across every available US sportsbook.")
