@@ -485,7 +485,7 @@ STAT_CONFIGS = [
 ]
 
 DISPLAY_COLS = [
-    "name", "confidence", "trend", "last10", "last10_hits", "game_status", "status_short", "starter", "player_url", "team-code", "opponent", "position", "spread",
+    "name", "confidence", "trend", "last10", "last10_hits", "game_status", "status_short", "teammates_out", "starter", "player_url", "team-code", "opponent", "position", "spread",
     "delta", "delta_5g", "delta_10g",
     "hit%", "history_hit%",
     "vs_opp_season", "vs_opp_career",
@@ -563,6 +563,33 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False):
         else pd.DataFrame(columns=["name", "status_short", "comment"])
     )
 
+    # --- Injury impact lookup: per team, which OUT players are typical starters? ---
+    # We use the players' average minutes (last 10 games) to rank "significance".
+    # For each team, build a list of OUT players sorted by mpg, plus a count.
+    team_out_impact: dict[str, dict] = {}
+    if not injuries.empty:
+        # Map each injured player to their current team via current season stats
+        recent_mins = (
+            df[df["rank"] <= 10]
+            .groupby(["name", "team-code"])["minutes"].mean()
+            .reset_index()
+            .rename(columns={"minutes": "mpg"})
+        )
+        out_set = set(injuries[injuries["status_short"].isin(["OUT", "DBT"])]["name"].dropna())
+        for team_code in recent_mins["team-code"].dropna().unique():
+            team_out = recent_mins[
+                (recent_mins["team-code"] == team_code) & (recent_mins["name"].isin(out_set))
+            ].sort_values("mpg", ascending=False)
+            if team_out.empty:
+                continue
+            starters_out = team_out[team_out["mpg"] >= 25.0]  # ~starter threshold
+            team_out_impact[team_code] = {
+                "count": int(len(team_out)),
+                "starters_out_count": int(len(starters_out)),
+                "starters_out_names": ", ".join(starters_out["name"].tolist()[:3]),
+                "all_out_names": ", ".join(team_out["name"].tolist()[:5]),
+            }
+
     # Game tipoff times per team (so we can flag in-progress / completed games)
     game_times = get_game_times(date)
     now_utc = pd.Timestamp.now(tz="UTC")
@@ -596,6 +623,25 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False):
         for col in ("status_short", "comment"):
             if col in result.columns:
                 result[col] = result[col].fillna("")
+
+        # Attach teammate injury impact: number of starters/OUT teammates
+        def _impact_short(team):
+            info = team_out_impact.get(team)
+            if not info:
+                return ""
+            n = info["starters_out_count"]
+            if n == 0:
+                return f"{info['count']} bench out"
+            return f"{n} starter{'s' if n > 1 else ''} out"
+
+        def _impact_full(team):
+            info = team_out_impact.get(team)
+            if not info:
+                return ""
+            return info.get("starters_out_names") or info.get("all_out_names") or ""
+
+        result["teammates_out"] = result["team-code"].apply(_impact_short)
+        result["teammates_out_names"] = result["team-code"].apply(_impact_full)
         # Tag each row with its game's status (pregame / live / completed).
         # Classify once per team then map onto the column, which is pandas 3.x safe.
         classifications = {t: _classify(t) for t in result["team-code"].unique()}
@@ -643,6 +689,7 @@ COLUMN_CONFIG = {
     "last10_hits": st.column_config.TextColumn("Hit/Miss", help="Each square = one of the last 10 games vs tonight's line. Green = beat the line, red = missed."),
     "game_status": st.column_config.TextColumn("Game", help="pregame / live / completed — live games show in-game lines that aren't pre-game lines"),
     "status_short": st.column_config.TextColumn("Inj", help="Injury status (OUT/DBT/Q/DTD/PROB)"),
+    "teammates_out": st.column_config.TextColumn("Inj Impact", help="How many of this player's teammates are OUT (starters specifically). More teammates out usually = more minutes/usage available for this player."),
     "starter": st.column_config.CheckboxColumn("Starter", help="Top 5 mpg on team in last 10 games"),
     "player_url": st.column_config.LinkColumn("Profile", display_text="NBA.com"),
     "team-code": st.column_config.TextColumn("Team"),
@@ -965,6 +1012,38 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             unsafe_allow_html=True,
         )
 
+    # --- Teammate injury impact context ---
+    # Look up the precomputed teammates_out info from any result row
+    teammates_out_label = ""
+    teammates_out_names = ""
+    for result_df in results.values():
+        if result_df is not None and not result_df.empty:
+            row = result_df[result_df["name"] == name]
+            if not row.empty:
+                teammates_out_label = row.iloc[0].get("teammates_out", "") or ""
+                teammates_out_names = row.iloc[0].get("teammates_out_names", "") or ""
+                break
+    if teammates_out_label and teammates_out_names:
+        st.markdown(
+            f"""
+            <div style="background-color: #f9731622; border-left: 4px solid #f97316;
+                        padding: 10px 14px; border-radius: 6px; margin-bottom: 14px;">
+                <div style="color: #f97316; font-weight: 700; font-size: 0.8rem;
+                            text-transform: uppercase; letter-spacing: 0.05em;">
+                    Teammate Impact &middot; {teammates_out_label}
+                </div>
+                <div style="color: #e6edf3; font-size: 0.95rem; margin-top: 2px;">
+                    Out: {teammates_out_names}
+                </div>
+                <div style="color: #8b92a5; font-size: 0.8rem; margin-top: 4px;">
+                    Use the <strong>What-If</strong> tab to see this player's stats specifically
+                    in games where one of these teammates didn't play.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     # --- Today's lines vs averages ---
     st.subheader("Today's Lines")
     lines = summary.get("today_lines", {})
@@ -1001,6 +1080,49 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                 delta = s_avg - line
                 st.metric(label, f"Line: {line}", delta=f"{delta:+.1f} vs season avg")
                 st.caption(f"Season: {s_avg:.1f}  |  Career: {c_avg:.1f}")
+                # Always-available "Add to parlay" buttons (separate from manual pick saving)
+                parlay_cols = st.columns(2)
+                with parlay_cols[0]:
+                    if st.button("➕ Parlay Over", key=f"parlay_over_{stat_key}", use_container_width=True):
+                        leg = {
+                            "player": name, "stat": stat_key, "side": "over",
+                            "line": float(line),
+                            "team": summary.get("team", ""), "opponent": opponent_code,
+                            "hit_pct": float(player_rows.iloc[0].get("hit%", 50.0)) if 'player_rows' in dir() and player_rows is not None and not player_rows.empty else 50.0,
+                            "confidence": None,
+                            "line_odds": -110,
+                        }
+                        # Pull confidence from the relevant result df
+                        rdf = results.get(stat_key)
+                        if rdf is not None and not rdf.empty:
+                            m = rdf[rdf["name"] == name]
+                            if not m.empty:
+                                leg["hit_pct"] = float(m.iloc[0].get("hit%") or 50.0)
+                                leg["confidence"] = float(m.iloc[0].get("confidence") or 0.0)
+                        builder = st.session_state.setdefault("_parlay_builder", [])
+                        builder.append(leg)
+                        st.toast(f"Added to parlay: {name} OVER {line} {label} ({len(builder)} legs)")
+                with parlay_cols[1]:
+                    if st.button("➕ Parlay Under", key=f"parlay_under_{stat_key}", use_container_width=True):
+                        leg = {
+                            "player": name, "stat": stat_key, "side": "under",
+                            "line": float(line),
+                            "team": summary.get("team", ""), "opponent": opponent_code,
+                            "hit_pct": 50.0,
+                            "confidence": None,
+                            "line_odds": -110,
+                        }
+                        rdf = results.get(stat_key)
+                        if rdf is not None and not rdf.empty:
+                            m = rdf[rdf["name"] == name]
+                            if not m.empty:
+                                # For unders, the "hit pct" is 100 - hit% (probability of going under)
+                                leg["hit_pct"] = 100 - float(m.iloc[0].get("hit%") or 50.0)
+                                leg["confidence"] = float(m.iloc[0].get("confidence") or 0.0)
+                        builder = st.session_state.setdefault("_parlay_builder", [])
+                        builder.append(leg)
+                        st.toast(f"Added to parlay: {name} UNDER {line} {label} ({len(builder)} legs)")
+
                 if pick_tracking_on:
                     btn_cols = st.columns(2)
                     with btn_cols[0]:
@@ -1616,7 +1738,7 @@ for _df in results.values():
         _df["game_status"] = _df["tipoff"].apply(_now_status)
 
 # --- Top navigation ---
-nav_options = ["Picks Board", "Auto Picks", "What-If", "Performance"]
+nav_options = ["Picks Board", "Auto Picks", "What-If", "Compare", "Parlays", "Performance"]
 if is_admin():
     nav_options.append("AI Analysis")
     nav_options.append("Analytics")
@@ -1980,6 +2102,222 @@ if nav_choice == "What-If":
         "STL": st.column_config.NumberColumn(format="%.0f"),
         "BLK": st.column_config.NumberColumn(format="%.0f"),
     })
+
+    st.stop()
+
+
+if nav_choice == "Compare":
+    st.title("Compare Players")
+    st.caption("Side-by-side season averages, hit rates, and tonight's matchup.")
+
+    all_player_names = sorted(summaries.keys()) if summaries else []
+    if not all_player_names:
+        st.info("No players with props yet. Click Fetch / Refresh Data first.")
+        st.stop()
+
+    cmp_cols = st.columns(3)
+    selected = []
+    for i, col in enumerate(cmp_cols):
+        with col:
+            pick = st.selectbox(
+                f"Player {i+1}",
+                options=[""] + all_player_names,
+                key=f"compare_player_{i}",
+            )
+            if pick:
+                selected.append(pick)
+
+    if len(selected) < 2:
+        st.info("Pick at least 2 players to compare.")
+        st.stop()
+
+    # Build a comparison DataFrame
+    METRIC_ROWS = [
+        ("Team", lambda s, _r: s.get("team", "")),
+        ("Position", lambda s, _r: s.get("position", "")),
+        ("Tonight's Opp", lambda _s, r: (r.iloc[0].get("opponent", "") if r is not None and not r.empty else "")),
+        ("Inj status", lambda s, _r: (s.get("injury") or {}).get("status_short") or "-"),
+        ("Season games", lambda s, _r: s.get("season_avg", {}).get("games", 0)),
+        ("Season PTS", lambda s, _r: round(s.get("season_avg", {}).get("points", 0), 1)),
+        ("Season REB", lambda s, _r: round(s.get("season_avg", {}).get("rebounds", 0), 1)),
+        ("Season AST", lambda s, _r: round(s.get("season_avg", {}).get("assists", 0), 1)),
+        ("Season MIN", lambda s, _r: round(s.get("season_avg", {}).get("minutes", 0), 1)),
+        ("Career PTS", lambda s, _r: round(s.get("career_avg", {}).get("points", 0), 1)),
+        ("Career REB", lambda s, _r: round(s.get("career_avg", {}).get("rebounds", 0), 1)),
+        ("Career AST", lambda s, _r: round(s.get("career_avg", {}).get("assists", 0), 1)),
+        ("Home PTS", lambda s, _r: round((s.get("home_avg") or {}).get("points", 0), 1) if s.get("home_avg") else "-"),
+        ("Away PTS", lambda s, _r: round((s.get("away_avg") or {}).get("points", 0), 1) if s.get("away_avg") else "-"),
+    ]
+
+    # For each selected player, build a column
+    compare_data = {"Metric": [row[0] for row in METRIC_ROWS]}
+    for player in selected:
+        summary = summaries.get(player, {})
+        # Find this player's PTS result row for tonight (just for opponent)
+        result_pts = results.get("points")
+        player_row = None
+        if result_pts is not None and not result_pts.empty:
+            match = result_pts[result_pts["name"] == player]
+            if not match.empty:
+                player_row = match
+        compare_data[player] = [getter(summary, player_row) for _, getter in METRIC_ROWS]
+
+    compare_df = pd.DataFrame(compare_data)
+    st.dataframe(compare_df, use_container_width=True, hide_index=True)
+
+    # --- Tonight's lines side-by-side ---
+    st.subheader("Tonight's lines")
+    line_rows = []
+    STAT_DISPLAY_CMP = [
+        ("points", "PTS"), ("rebounds", "REB"), ("assists", "AST"),
+        ("pra", "PRA"), ("threes", "3PM"), ("steals", "STL"), ("blocks", "BLK"),
+    ]
+    for stat_key, label in STAT_DISPLAY_CMP:
+        line_data = {"Stat": label}
+        any_line = False
+        for player in selected:
+            line = (summaries.get(player, {}).get("today_lines") or {}).get(stat_key)
+            if line is not None:
+                any_line = True
+            # Also pull this season's hit% from results
+            result_df = results.get(stat_key)
+            hit = None
+            if result_df is not None and not result_df.empty:
+                match = result_df[result_df["name"] == player]
+                if not match.empty:
+                    hit = match.iloc[0].get("hit%")
+            cell = ""
+            if line is not None:
+                cell = f"{line:.1f}"
+                if hit is not None and not pd.isna(hit):
+                    cell += f" ({hit:.0f}%)"
+            line_data[player] = cell
+        if any_line:
+            line_rows.append(line_data)
+
+    if line_rows:
+        st.dataframe(pd.DataFrame(line_rows), use_container_width=True, hide_index=True)
+    else:
+        st.caption("None of the selected players have prop lines on the current slate.")
+
+    st.stop()
+
+
+if nav_choice == "Parlays":
+    from parlays import (
+        combined_odds, detect_correlations, estimated_hit_pct,
+        save_parlay, fetch_user_parlays, delete_parlay,
+    )
+
+    st.title("Parlays")
+    st.caption("Build multi-leg parlays from your picks, see combined odds + correlation warnings, and track them.")
+
+    builder = st.session_state.get("_parlay_builder", [])
+
+    # --- Active builder ---
+    st.subheader(f"Builder ({len(builder)} legs)")
+    if not builder:
+        st.info("Open a player's detail page and click ➕ Parlay Over / Under to add legs here.")
+    else:
+        # Show each leg with a remove button
+        for i, leg in enumerate(builder):
+            cols = st.columns([4, 1])
+            with cols[0]:
+                arrow = "↑" if leg["side"] == "over" else "↓"
+                color = "#22c55e" if leg["side"] == "over" else "#ef4444"
+                conf_text = f" · conf {leg.get('confidence', 0):.0f}" if leg.get("confidence") is not None else ""
+                st.markdown(
+                    f"<div style='padding:6px 0;'>"
+                    f"<span style='color:{color};font-weight:700;'>{arrow} {leg['side'].upper()}</span> "
+                    f"<strong>{leg['player']}</strong> {leg['line']:.1f} {leg['stat'].upper()} "
+                    f"<span style='color:#8b92a5;'>({leg['team']} vs {leg['opponent']}) · hit {leg.get('hit_pct', 0):.0f}%{conf_text}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            with cols[1]:
+                if st.button("Remove", key=f"parlay_remove_{i}", use_container_width=True):
+                    builder.pop(i)
+                    st.rerun()
+
+        # Combined odds + EV
+        odds = combined_odds(builder)
+        est_hit = estimated_hit_pct(builder)
+        m = st.columns(4)
+        m[0].metric("Legs", len(builder))
+        m[1].metric("Combined Odds", f"{odds['american']:+d}")
+        m[2].metric("Implied %", f"{odds['implied_pct']:.1f}%")
+        m[3].metric("Est. hit %", f"{est_hit:.1f}%", help="Naive product of leg hit rates. Doesn't account for correlation — see warnings.")
+
+        # Correlation warnings
+        warnings = detect_correlations(builder)
+        if warnings:
+            st.warning("⚠️ Correlation warnings:")
+            for w in warnings:
+                st.markdown(f"- {w}")
+
+        # Save / clear
+        save_cols = st.columns([2, 1, 1])
+        with save_cols[0]:
+            parlay_name = st.text_input(
+                "Name this parlay",
+                value=f"{datetime.date.today()} {len(builder)}-leg",
+                key="parlay_name",
+            )
+            stake = st.number_input("Stake ($)", value=10.0, min_value=0.0, step=5.0, key="parlay_stake")
+        with save_cols[1]:
+            st.write("")
+            st.write("")
+            if st.button("💾 Save parlay", type="primary", use_container_width=True):
+                user = current_user() or {}
+                saved = save_parlay(user.get("email", "anonymous"), parlay_name, builder, stake=stake)
+                if saved:
+                    st.success("Parlay saved.")
+                    st.session_state["_parlay_builder"] = []
+                    st.rerun()
+                else:
+                    st.error("Could not save (Supabase parlays table may not exist).")
+        with save_cols[2]:
+            st.write("")
+            st.write("")
+            if st.button("🗑️ Clear", use_container_width=True):
+                st.session_state["_parlay_builder"] = []
+                st.rerun()
+
+    # --- Saved parlays ---
+    st.divider()
+    st.subheader("My saved parlays")
+    user = current_user() or {}
+    saved_parlays = fetch_user_parlays(user.get("email", ""))
+    if not saved_parlays:
+        st.caption("None yet.")
+    else:
+        for p in saved_parlays:
+            with st.container(border=True):
+                top = st.columns([3, 1])
+                with top[0]:
+                    st.markdown(
+                        f"**{p.get('name', 'Untitled')}** &middot; "
+                        f"{len(p.get('legs', []))} legs &middot; "
+                        f"{p.get('combined_odds_american', 0):+d} &middot; "
+                        f"est {p.get('estimated_hit_pct', 0):.1f}% &middot; "
+                        f"${p.get('stake', 0):.0f} stake"
+                    )
+                    st.caption(f"Saved {p.get('created_at', '')[:10]} · status: {p.get('status', '?')}")
+                    for leg in p.get("legs", []):
+                        side = (leg.get("side") or "").upper()
+                        arrow = "↑" if side == "OVER" else "↓"
+                        color = "#22c55e" if side == "OVER" else "#ef4444"
+                        st.markdown(
+                            f"<div style='padding-left:14px;color:#8b92a5;font-size:0.9rem;'>"
+                            f"<span style='color:{color};font-weight:600;'>{arrow}</span> "
+                            f"{leg.get('player')} {side} {leg.get('line', 0)} {leg.get('stat','').upper()}"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                with top[1]:
+                    if st.button("Delete", key=f"del_parlay_{p['id']}", use_container_width=True):
+                        delete_parlay(p["id"])
+                        st.rerun()
 
     st.stop()
 
