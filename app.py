@@ -110,6 +110,22 @@ st.markdown(
         footer { visibility: hidden; }
         [data-testid="stDecoration"] { display: none; }
 
+        /* Sticky pills (stat selector) and st.tabs (Strong Overs / etc.) so
+           they stay visible while scrolling the long results table. */
+        [data-testid="stPills"] {
+            position: sticky;
+            top: 0;
+            background: #0f1115;
+            z-index: 50;
+            padding: 6px 0;
+        }
+        .stTabs [data-baseweb="tab-list"] {
+            position: sticky;
+            top: 58px;
+            background: #0f1115;
+            z-index: 49;
+        }
+
         /* ==========================
            Mobile (< 768px) overrides
            ========================== */
@@ -494,13 +510,26 @@ STAT_CONFIGS = [
     ("blocks", "Total Blocks"),
 ]
 
-DISPLAY_COLS = [
+# Essential columns shown by default — the bare minimum to evaluate a pick.
+DISPLAY_COLS_DEFAULT = [
+    "name", "confidence", "trend", "last10_hits",
+    "status_short", "teammates_out",
+    "team-code", "opponent", "spread",
+    "delta", "delta_10g", "hit%", "history_hit%",
+    "rank",
+]
+
+# Full power-user view: everything we have.
+DISPLAY_COLS_ALL = [
     "name", "confidence", "trend", "last10", "last10_hits", "game_status", "status_short", "teammates_out", "starter", "player_url", "team-code", "opponent", "position", "spread",
     "delta", "delta_5g", "delta_10g",
     "hit%", "history_hit%",
     "vs_opp_season", "vs_opp_career",
     "rank", "rest_days", "b2b", "opp_rest", "opp_b2b", "std_dev", "spm",
 ]
+
+# Kept for backward compatibility with any code that imports DISPLAY_COLS
+DISPLAY_COLS = DISPLAY_COLS_ALL
 
 CACHE_DIR = os.path.join(DATA_DIR, "daily_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -1021,6 +1050,30 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             """,
             unsafe_allow_html=True,
         )
+
+    # --- Quick-jump nav (anchor links to major sections below) ---
+    st.markdown(
+        """
+        <style>
+          .stl-jump a {
+            display: inline-block; padding: 4px 10px; margin-right: 6px;
+            background: #1a1d24; color: #e6edf3; border-radius: 14px;
+            border: 1px solid #2a2f3a; text-decoration: none;
+            font-size: 0.78rem; font-weight: 600;
+          }
+          .stl-jump a:hover { background: #22c55e; color: #0f1115; }
+        </style>
+        <div class="stl-jump" style="margin: 8px 0 12px;">
+          <a href="#today-s-lines">Lines</a>
+          <a href="#line-movement-today">Movement</a>
+          <a href="#last-10-games">Charts</a>
+          <a href="#averages">Averages</a>
+          <a href="#last-20-games">Last 20</a>
+          <a href="#career-vs">Vs Opp</a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # --- Teammate injury impact context ---
     # Look up the precomputed teammates_out info from any result row
@@ -3000,10 +3053,22 @@ STAT_LABELS = {
 }
 stat_col, view_col = st.columns([4, 1])
 with stat_col:
-    stat_tab = st.radio(
-        "Stat", list(STAT_LABELS.keys()),
-        horizontal=True, label_visibility="collapsed",
-    )
+    # st.pills is a newer, more compact selector. Falls back to radio on older
+    # Streamlit versions.
+    try:
+        stat_tab = st.pills(
+            "Stat", list(STAT_LABELS.keys()),
+            default=list(STAT_LABELS.keys())[0],
+            label_visibility="collapsed",
+            selection_mode="single",
+        )
+        if stat_tab is None:
+            stat_tab = list(STAT_LABELS.keys())[0]
+    except AttributeError:
+        stat_tab = st.radio(
+            "Stat", list(STAT_LABELS.keys()),
+            horizontal=True, label_visibility="collapsed",
+        )
 with view_col:
     compact = st.toggle("Compact", value=st.session_state.get("compact_view", False),
                         help="Card layout — better on mobile")
@@ -3135,6 +3200,14 @@ with st.sidebar:
         help="Games that have already finished. Kept hidden by default since you can't bet them anymore.",
     )
 
+    st.markdown("**View**")
+    advanced_toggle = st.checkbox(
+        "Show all columns (advanced)",
+        value=st.session_state.get("show_advanced_columns", False),
+        help="Default view shows ~14 essential columns. Toggle on to see all 26.",
+    )
+    st.session_state["show_advanced_columns"] = advanced_toggle
+
 # --- Apply filters ---
 filtered = result.copy()
 if selected_teams:
@@ -3161,8 +3234,10 @@ if "game_status" in filtered.columns:
         allowed.add("completed")
     filtered = filtered[filtered["game_status"].isin(allowed)]
 
-# --- Display columns (only show what exists) ---
-show_cols = [c for c in DISPLAY_COLS if c in filtered.columns]
+# --- Display columns: respect the 'Advanced columns' sidebar toggle ---
+advanced = st.session_state.get("show_advanced_columns", False)
+_cols_source = DISPLAY_COLS_ALL if advanced else DISPLAY_COLS_DEFAULT
+show_cols = [c for c in _cols_source if c in filtered.columns]
 
 st.caption("Click a row to see player details.")
 
