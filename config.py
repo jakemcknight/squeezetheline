@@ -15,6 +15,44 @@ BACKFILL_COOLDOWN_SECONDS = 3600
 # Data directory (relative to project root)
 DATA_DIR = "data"
 
+# --- Sport configuration ---
+# The Odds API supports many sports. Players, line types, and historical
+# data sources differ per sport. NBA is fully wired up; the others are
+# stubs that show in the sport selector but need per-sport scrapers
+# (player stats, injury reports, defense rankings) before they're usable.
+SPORTS = {
+    "NBA": {
+        "key": "basketball_nba",
+        "active": True,
+        "markets": [
+            "player_points", "player_rebounds", "player_assists",
+            "player_points_rebounds_assists", "player_threes",
+            "player_steals", "player_blocks",
+        ],
+    },
+    "WNBA": {
+        "key": "basketball_wnba",
+        "active": False,  # stub
+        "markets": ["player_points", "player_rebounds", "player_assists"],
+    },
+    "NCAA Men's Basketball": {
+        "key": "basketball_ncaab",
+        "active": False,  # stub
+        "markets": ["player_points", "player_rebounds", "player_assists"],
+    },
+    "NFL": {
+        "key": "americanfootball_nfl",
+        "active": False,  # stub
+        "markets": [
+            "player_pass_yds", "player_rush_yds", "player_receptions",
+            "player_anytime_td",
+        ],
+    },
+}
+
+DEFAULT_SPORT = "NBA"
+
+
 # --- The Odds API (player props) ---
 # Sign up for a free key at https://the-odds-api.com
 # Set ODDS_API_KEY as an environment variable, or in .streamlit/secrets.toml when deployed

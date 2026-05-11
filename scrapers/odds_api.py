@@ -27,6 +27,17 @@ MARKET_MAP = {
     "player_blocks": "Total Blocks",
 }
 
+# Alternate-line markets (each line + odds) — these are SGP/parlay-friendly
+# markets where bookmakers offer multiple lines at different prices for the
+# same stat. Used by the alt-line lookup helper, not the main pipeline.
+ALT_MARKET_MAP = {
+    "player_points_alternate": "Alt Points",
+    "player_rebounds_alternate": "Alt Rebounds",
+    "player_assists_alternate": "Alt Assists",
+    "player_points_rebounds_assists_alternate": "Alt PRA",
+    "player_threes_alternate": "Alt 3PM",
+}
+
 # All markets we want, comma-separated for a single API call per event
 MARKETS = ",".join(MARKET_MAP.keys())
 
@@ -66,6 +77,45 @@ def get_events_for_date(date: datetime.date = None) -> list[dict]:
         if eastern_date == date:
             filtered.append(event)
     return filtered
+
+
+def get_event_alt_props(event_id: str, player: str, stat_market: str) -> list[dict]:
+    """Fetch alternate-line offerings for a single event + market.
+
+    Returns a list of {line, price, book} sorted by line.
+    Useful for SGP-style alternate-line shopping on the player detail page.
+    """
+    url = f"{ODDS_API_BASE}/sports/basketball_nba/events/{event_id}/odds"
+    try:
+        resp = requests.get(url, params={
+            "apiKey": get_odds_api_key(),
+            "regions": "us",
+            "markets": stat_market,
+            "oddsFormat": "american",
+        }, timeout=15)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+    except Exception:
+        return []
+
+    rows = []
+    for book in data.get("bookmakers", []):
+        book_key = book.get("key", "")
+        for market in book.get("markets", []):
+            for outcome in market.get("outcomes", []):
+                # Alt markets list each line as a separate "Over" outcome
+                if outcome.get("name") != "Over":
+                    continue
+                if outcome.get("description") != player:
+                    continue
+                rows.append({
+                    "line": float(outcome["point"]),
+                    "price": int(outcome.get("price", -110)),
+                    "book": book_key,
+                })
+    rows.sort(key=lambda r: r["line"])
+    return rows
 
 
 def get_event_props(event_id: str, all_books: bool = False) -> list[dict]:

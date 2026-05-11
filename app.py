@@ -132,8 +132,41 @@ st.markdown(
         @media (max-width: 768px) {
             /* Reduce main container padding to maximize screen usage */
             .main .block-container {
-                padding: 1rem 0.75rem !important;
+                padding: 0.75rem 0.5rem !important;
                 max-width: 100% !important;
+            }
+
+            /* Force compact card view + bigger tap targets */
+            [data-testid="stRadio"] label,
+            [data-testid="stPills"] button {
+                min-height: 44px !important;
+                font-size: 0.9rem !important;
+            }
+
+            /* Hero photo smaller on mobile */
+            [data-testid="stImage"] img {
+                max-width: 90px !important;
+                height: auto !important;
+            }
+
+            /* Sticky pills shouldn't overlap content as much */
+            [data-testid="stPills"] {
+                top: 0 !important;
+                padding: 4px 0 !important;
+            }
+            .stTabs [data-baseweb="tab-list"] {
+                top: 50px !important;
+            }
+
+            /* Quick-jump bar should wrap nicely on mobile */
+            .stl-jump {
+                display: flex !important;
+                flex-wrap: wrap !important;
+                gap: 6px !important;
+            }
+            .stl-jump a {
+                flex: 1 1 calc(33% - 6px) !important;
+                text-align: center !important;
             }
 
             /* Smaller heading sizes */
@@ -1051,6 +1084,61 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             unsafe_allow_html=True,
         )
 
+    # --- Live game tracker (only when this player's game is in progress) ---
+    is_player_live = False
+    for result_df in results.values():
+        if result_df is not None and not result_df.empty:
+            row = result_df[result_df["name"] == name]
+            if not row.empty and row.iloc[0].get("game_status") == "live":
+                is_player_live = True
+                break
+    if is_player_live:
+        try:
+            from scrapers.nba import get_live_box_score
+            live = get_live_box_score(name)
+        except Exception:
+            live = None
+        if live:
+            lines_dict = summary.get("today_lines", {}) or {}
+            cards_html = []
+            stat_map = [
+                ("points", "Points", "pts"),
+                ("rebounds", "Rebounds", "reb"),
+                ("assists", "Assists", "ast"),
+                ("threes", "3PM", "threes"),
+                ("steals", "Steals", "steals"),
+                ("blocks", "Blocks", "blocks"),
+            ]
+            for stat_key, label, live_key in stat_map:
+                line = lines_dict.get(stat_key)
+                if line is None:
+                    continue
+                current = live.get(live_key, 0)
+                pacing_color = "#22c55e" if current >= line else ("#ef4444" if current < line * 0.6 else "#f59e0b")
+                cards_html.append(
+                    f"<td style='padding:8px 14px;border-right:1px solid #2a2f3a;'>"
+                    f"<div style='color:#8b92a5;font-size:0.7rem;text-transform:uppercase;'>{label}</div>"
+                    f"<div style='font-size:1.4rem;font-weight:700;color:{pacing_color};'>{current} / {line:.1f}</div>"
+                    f"</td>"
+                )
+            period = live.get("period", "?")
+            clock = live.get("time_remaining", "")
+            st.markdown(
+                f"""
+                <div style="background:#1a1d24;border:2px solid #ef4444;border-radius:8px;
+                            padding:10px 16px;margin:10px 0;">
+                    <div style="color:#ef4444;font-weight:800;font-size:0.85rem;
+                                text-transform:uppercase;letter-spacing:0.05em;">
+                        \U0001f534 LIVE &middot; Q{period} {clock}
+                    </div>
+                    <table cellpadding="0" cellspacing="0" style="margin-top:8px;width:100%;">
+                        <tr>{''.join(cards_html) or '<td style="color:#8b92a5;">No lines on the slate.</td>'}</tr>
+                    </table>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
     # --- Quick-jump nav (anchor links to major sections below) ---
     st.markdown(
         """
@@ -1337,6 +1425,55 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                     st.altair_chart(chart, use_container_width=True)
     except Exception:
         pass
+
+    # --- Alternate lines lookup (admin-only, costs API credits) ---
+    if is_admin():
+        with st.expander("Alternate lines (SGP-friendly)"):
+            st.caption(
+                "Live lookup of every alt line + odds offered for this player. "
+                "Costs 1 Odds API credit per market — use sparingly."
+            )
+            from scrapers.odds_api import get_event_alt_props, ALT_MARKET_MAP, get_events_for_date
+            alt_stat_choices = list(ALT_MARKET_MAP.items())
+            alt_label = st.selectbox(
+                "Stat",
+                options=[v for _, v in alt_stat_choices],
+                key=f"alt_stat_{name}",
+            )
+            if st.button("Fetch alt lines", key=f"alt_fetch_{name}"):
+                alt_market = next((k for k, v in alt_stat_choices if v == alt_label), None)
+                # Find this player's event ID
+                events_today = get_events_for_date(selected_date)
+                player_team = summary.get("team", "")
+                alt_event = None
+                # Iterate events and find the one whose home/away team matches
+                from config import TEAM_NAME_TO_CODE
+                for ev in events_today:
+                    home = TEAM_NAME_TO_CODE.get(ev["home_team"], ev["home_team"])
+                    away = TEAM_NAME_TO_CODE.get(ev["away_team"], ev["away_team"])
+                    if player_team in (home, away):
+                        alt_event = ev
+                        break
+                if alt_event is None:
+                    st.error(f"Couldn't find tonight's event for {player_team}.")
+                elif alt_market:
+                    with st.spinner("Fetching alt lines..."):
+                        alts = get_event_alt_props(alt_event["id"], name, alt_market)
+                    if not alts:
+                        st.info("No alt lines returned (may not be offered yet).")
+                    else:
+                        alt_df = pd.DataFrame(alts)
+                        # Aggregate: best price per line across books
+                        best = alt_df.loc[alt_df.groupby("line")["price"].idxmax()].sort_values("line")
+                        st.dataframe(
+                            best.rename(columns={"line": "Line", "price": "Best Odds", "book": "Best Book"}),
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Line": st.column_config.NumberColumn(format="%.1f"),
+                                "Best Odds": st.column_config.NumberColumn(format="%+d"),
+                            },
+                        )
 
     # --- EV + Kelly calculator ---
     st.subheader("EV + Kelly calculator")
@@ -1835,7 +1972,7 @@ for _df in results.values():
         _df["game_status"] = _df["tipoff"].apply(_now_status)
 
 # --- Top navigation ---
-nav_options = ["Picks Board", "Auto Picks", "What-If", "Compare", "Parlays", "Performance"]
+nav_options = ["Picks Board", "Auto Picks", "What-If", "Compare", "Parlays", "Leaderboard", "Performance"]
 if is_admin():
     nav_options.append("AI Analysis")
     nav_options.append("Analytics")
@@ -2419,6 +2556,67 @@ if nav_choice == "Parlays":
     st.stop()
 
 
+if nav_choice == "Leaderboard":
+    st.title("Leaderboard")
+    st.caption("Whose saved picks have the best record. Tied to your manual pick log + saved parlays.")
+
+    from parlays import fetch_user_parlays
+    from auth import get_supabase
+    sb_lb = get_supabase()
+    if sb_lb is None:
+        st.info("Leaderboard requires Supabase. Connect first.")
+        st.stop()
+
+    # Aggregate ALL graded parlays across users (anon can read by RLS policy)
+    try:
+        resp = sb_lb.table("parlays").select("*").execute()
+        all_parlays = resp.data or []
+    except Exception:
+        all_parlays = []
+
+    if not all_parlays:
+        st.info("No saved parlays yet. Once people start building tickets, this will populate.")
+        st.stop()
+
+    # Build per-user stats
+    rows = {}
+    for p in all_parlays:
+        email = p.get("user_email", "anonymous")
+        if email not in rows:
+            rows[email] = {"user": email.split("@")[0], "tickets": 0, "won": 0, "lost": 0, "open": 0, "profit": 0.0, "wagered": 0.0}
+        rows[email]["tickets"] += 1
+        stake = float(p.get("stake", 10.0))
+        decimal = float(p.get("combined_odds_decimal", 1.0))
+        rows[email]["wagered"] += stake
+        status = p.get("status", "open")
+        if status == "won":
+            rows[email]["won"] += 1
+            rows[email]["profit"] += stake * (decimal - 1)
+        elif status == "lost":
+            rows[email]["lost"] += 1
+            rows[email]["profit"] -= stake
+        elif status == "open":
+            rows[email]["open"] += 1
+
+    lb_df = pd.DataFrame(rows.values())
+    if not lb_df.empty:
+        lb_df["roi%"] = lb_df.apply(
+            lambda r: (r["profit"] / r["wagered"] * 100) if r["wagered"] > 0 else 0.0,
+            axis=1,
+        ).round(1)
+        lb_df = lb_df.sort_values("profit", ascending=False)
+        st.dataframe(
+            lb_df[["user", "tickets", "won", "lost", "open", "wagered", "profit", "roi%"]],
+            use_container_width=True, hide_index=True,
+            column_config={
+                "wagered": st.column_config.NumberColumn("Wagered", format="$%.2f"),
+                "profit": st.column_config.NumberColumn("Profit", format="$%+.2f"),
+                "roi%": st.column_config.NumberColumn("ROI", format="%.1f%%"),
+            },
+        )
+    st.stop()
+
+
 if nav_choice == "Performance":
     st.title("Performance Analytics")
     st.caption(
@@ -2548,6 +2746,32 @@ if nav_choice == "Performance":
                     "wagered": st.column_config.NumberColumn("Wagered", format="$%.2f"),
                     "profit": st.column_config.NumberColumn("Profit", format="$%+.2f"),
                     "roi": st.column_config.NumberColumn("ROI", format="%.1f%%"),
+                },
+            )
+
+    # --- Strategy tuner ---
+    st.divider()
+    st.subheader("Strategy tuner")
+    st.caption(
+        "Sweep every combination of confidence/hit%/history% thresholds + side restriction "
+        "against your graded auto-picks. The top rows tell you which filter combo would have "
+        "produced the highest historical ROI."
+    )
+    if st.button("Run strategy sweep", key="run_strategy_sweep"):
+        from strategy_tuner import sweep_strategies
+        with st.spinner("Sweeping..."):
+            sweep = sweep_strategies(picks_df, odds=int(odds_price))
+        if sweep.empty:
+            st.info("Not enough graded picks yet (need at least 20 per strategy). Wait a few weeks.")
+        else:
+            st.dataframe(
+                sweep.head(50),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "roi": st.column_config.NumberColumn("ROI", format="%.1f%%"),
+                    "win_rate": st.column_config.NumberColumn("Win %", format="%.1f%%"),
+                    "profit": st.column_config.NumberColumn("Profit", format="$%+.2f"),
                 },
             )
 

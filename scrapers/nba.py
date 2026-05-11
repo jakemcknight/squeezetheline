@@ -9,6 +9,7 @@ the calls below use a longer timeout and retry on transient failures.
 """
 
 import time
+from typing import Optional
 
 import pandas as pd
 from nba_api.stats.endpoints import LeagueGameLog, PlayerIndex
@@ -113,6 +114,55 @@ def get_current_season_stats() -> pd.DataFrame:
     df["blocks"] = pd.to_numeric(raw["BLK"], errors="coerce").fillna(0)
     df["pra"] = df["points"] + df["rebounds"] + df["assists"]
     return df
+
+
+def get_live_box_score(player_name: str) -> Optional[dict]:
+    """Return live in-game stats for a player if their game is currently running.
+
+    Uses nba_api's scoreboard + boxscore_v3 endpoints. Returns:
+      {pts, reb, ast, threes, steals, blocks, minutes, period, time_remaining}
+    or None if no live game found for the player.
+    """
+    try:
+        from nba_api.live.nba.endpoints import scoreboard, boxscore
+    except ImportError:
+        return None
+
+    try:
+        sb = scoreboard.ScoreBoard(timeout=10)
+        games = sb.games.get_dict()
+    except Exception:
+        return None
+
+    # Try to find a live game; look up the boxscore for each
+    for g in games or []:
+        if g.get("gameStatus") not in (2,):  # 2 = in progress
+            continue
+        game_id = g.get("gameId")
+        try:
+            bs = boxscore.BoxScore(game_id=game_id, timeout=10)
+            data = bs.get_dict()
+        except Exception:
+            continue
+        for team_key in ("homeTeam", "awayTeam"):
+            for p in (data.get("game", {}).get(team_key, {}) or {}).get("players", []) or []:
+                full = f"{p.get('firstName','')} {p.get('familyName','')}".strip()
+                if full.lower() != player_name.lower():
+                    continue
+                stats = p.get("statistics", {}) or {}
+                return {
+                    "pts": int(stats.get("points", 0)),
+                    "reb": int(stats.get("reboundsTotal", 0)),
+                    "ast": int(stats.get("assists", 0)),
+                    "threes": int(stats.get("threePointersMade", 0)),
+                    "steals": int(stats.get("steals", 0)),
+                    "blocks": int(stats.get("blocks", 0)),
+                    "minutes": str(stats.get("minutes", "0")),
+                    "period": int(data["game"].get("period", 1)),
+                    "time_remaining": data["game"].get("gameClock", ""),
+                    "team": team_key,
+                }
+    return None
 
 
 def get_player_positions() -> pd.DataFrame:
