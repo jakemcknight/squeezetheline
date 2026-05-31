@@ -235,7 +235,7 @@ function AllPicksTable({ picks, sport }: { picks: Pick[]; sport: string }) {
                     >
                       {p.player}
                     </Link>
-                    <div className="text-xs text-muted">{p.position ?? ""}{p.team_abbr}</div>
+                    <div className="text-xs text-muted">{p.team_abbr}</div>
                   </td>
                   <td className="px-4 py-3 text-muted">
                     {p.team_abbr} vs {p.opponent_abbr}
