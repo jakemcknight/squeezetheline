@@ -1,0 +1,29 @@
+# Render Blueprint for the Squeeze the Line FastAPI backend.
+#
+# NOTE: the service root is the *repo root*, not /backend. The live provider
+# (backend/providers/live.py) imports repo-root modules (config.py, analysis.py,
+# data.py, scrapers/), so the whole repo must be present at runtime. The app is
+# loaded from the backend/ directory via `--app-dir backend`.
+#
+# Deploy: push this file, then create a new Blueprint in the Render dashboard
+# pointed at this repo. Set ODDS_API_KEY (and optional Supabase vars) as env
+# vars in the dashboard — they are intentionally left unset here.
+services:
+  - type: web
+    name: squeeze-the-line-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn main:app --app-dir backend --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: ODDS_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

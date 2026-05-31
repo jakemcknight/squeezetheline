@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { api, type Pick, type Sport } from "@/lib/api";
+import { api, API_BASE, type Pick, type Sport } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { SportTabs } from "@/components/SportTabs";
 import { PickCard } from "@/components/PickCard";
@@ -320,7 +320,7 @@ function ErrorState({ message }: { message: string }) {
       <div className="font-semibold">Couldn&apos;t load the slate.</div>
       <div className="mt-1 text-rose-300/80">{message}</div>
       <div className="mt-2 text-rose-300/60">
-        Is the API running at <code>http://localhost:8000</code>?
+        Is the API running at <code>{API_BASE}</code>?
       </div>
     </div>
   );

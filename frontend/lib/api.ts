@@ -1,8 +1,12 @@
 // Typed client for the Squeeze the Line FastAPI backend.
-// Types mirror backend/models.py. Swap API_BASE via NEXT_PUBLIC_API_BASE.
+// Types mirror backend/models.py. Point at a deployed backend by setting
+// NEXT_PUBLIC_API_URL (falls back to the legacy NEXT_PUBLIC_API_BASE, then
+// the local dev server).
 
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_URL ??
+  process.env.NEXT_PUBLIC_API_BASE ??
+  "http://localhost:8000";
 
 export interface Sport {
   key: string;
