@@ -43,11 +43,6 @@ export function NavBar() {
             );
           })}
         </nav>
-
-        <div className="ml-auto hidden items-center gap-2 text-xs text-muted sm:flex">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
-          Mock data
-        </div>
       </div>
     </header>
   );
