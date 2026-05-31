@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { Pick } from "@/lib/api";
 import { confidenceTier, pct, signed, trendGlyph } from "@/lib/format";
+import { SavePickButton } from "@/components/SavePickButton";
 
 const accent: Record<
   string,
@@ -57,11 +58,14 @@ export function PickCard({ pick, sport }: { pick: Pick; sport: string }) {
             {pick.opponent_abbr} · {pick.game_time}
           </div>
         </div>
-        <span
-          className={`shrink-0 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ring-1 ${a.badge}`}
-        >
-          {pick.recommendation.label}
-        </span>
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <span
+            className={`rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ring-1 ${a.badge}`}
+          >
+            {pick.recommendation.label}
+          </span>
+          <SavePickButton pick={pick} sport={sport} />
+        </div>
       </div>
 
       <div className="mt-3 flex items-end justify-between">

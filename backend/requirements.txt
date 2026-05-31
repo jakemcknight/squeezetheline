@@ -3,6 +3,12 @@ fastapi==0.110.0
 uvicorn[standard]==0.29.0
 pydantic==2.6.4
 
+# --- Auth + user data (Supabase). Optional at runtime: the user endpoints
+# degrade to 503 if these aren't configured, but the packages are needed to
+# verify JWTs and talk to Supabase. ---
+PyJWT==2.8.0
+supabase>=2.4,<3
+
 # --- Live data pipeline (repo-root scrapers + analysis) ---
 # Pinned loosely for Python 3.9 compatibility (the root modules use
 # `from __future__ import annotations` for 3.9 support).

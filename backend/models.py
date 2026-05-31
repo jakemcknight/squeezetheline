@@ -97,3 +97,85 @@ class Slate(BaseModel):
     date: str
     generated_at: str
     picks: List[Pick]
+
+
+# --- User-specific models (require auth) ------------------------------------
+
+
+class SavePickRequest(BaseModel):
+    """Payload the frontend sends to track a pick. Mirrors the fields shown on
+    a pick card so ``My Picks`` can render without re-fetching the slate."""
+    pick_id: str
+    player: str
+    team_abbr: str
+    opponent_abbr: str
+    sport: str
+    stat_type: str
+    line: float
+    projection: float
+    edge: float
+    confidence: int
+    side: str                      # over | under | none
+    recommendation: str            # human label, e.g. "Strong Over"
+    game_time: Optional[str] = None
+
+
+class SavedPick(BaseModel):
+    """A tracked pick, optionally joined with its settled result."""
+    id: str
+    pick_id: str
+    player: str
+    team_abbr: str
+    opponent_abbr: str
+    sport: str
+    stat_type: str
+    line: float
+    projection: float
+    edge: float
+    confidence: int
+    side: str
+    recommendation: str
+    game_time: Optional[str] = None
+    saved_at: str
+    result: str = "pending"        # pending | win | loss | push
+    actual_value: Optional[float] = None
+    settled_at: Optional[str] = None
+
+
+class HistoryStats(BaseModel):
+    """Aggregate performance over a user's settled picks."""
+    total: int
+    wins: int
+    losses: int
+    pushes: int
+    pending: int
+    win_rate: float                # wins / (wins + losses), 0-1
+
+
+class PickHistory(BaseModel):
+    stats: HistoryStats
+    picks: List[SavedPick]
+
+
+class AlertRequest(BaseModel):
+    """Set up a line-movement alert for a pick."""
+    pick_id: str
+    player: str
+    stat_type: str
+    sport: str
+    direction: str                 # over | under
+    threshold: float               # notify when the line crosses this value
+    note: Optional[str] = None
+
+
+class Alert(BaseModel):
+    id: str
+    pick_id: str
+    player: str
+    stat_type: str
+    sport: str
+    direction: str
+    threshold: float
+    note: Optional[str] = None
+    active: bool = True
+    created_at: str

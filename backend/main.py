@@ -24,8 +24,11 @@ except Exception:
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from auth import auth_configured
+from db import db_configured
 from models import Injury, PlayerDetail, Slate, Sport
 from providers import get_provider
+from routes_user import router as user_router
 
 app = FastAPI(
     title="Squeeze the Line API",
@@ -59,6 +62,11 @@ app.add_middleware(
 
 provider = get_provider()
 
+# User-specific, auth-protected routes (/api/picks/*, /api/alerts). The public
+# projection routes above stay open; these short-circuit with 503 when Supabase
+# isn't configured.
+app.include_router(user_router)
+
 
 @app.get("/")
 def root() -> dict:
@@ -67,7 +75,9 @@ def root() -> dict:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok"}
+    # `auth` reflects whether user features are available, so the frontend can
+    # surface or hide them based on server config.
+    return {"status": "ok", "auth": auth_configured() and db_configured()}
 
 
 @app.get("/api/sports", response_model=List[Sport])

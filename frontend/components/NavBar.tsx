@@ -2,14 +2,24 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/components/AuthProvider";
+import { UserMenu } from "@/components/UserMenu";
 
-const links = [
+const baseLinks = [
   { href: "/", label: "Dashboard" },
   { href: "/injuries", label: "Injuries" },
 ];
 
 export function NavBar() {
   const pathname = usePathname();
+  const { configured, user } = useAuth();
+
+  // "My Picks" is only relevant for signed-in users.
+  const links =
+    configured && user
+      ? [...baseLinks, { href: "/my-picks", label: "My Picks" }]
+      : baseLinks;
+
   return (
     <header className="sticky top-0 z-40 border-b border-border/80 bg-background/80 backdrop-blur-md">
       <div className="mx-auto flex h-14 w-full max-w-7xl items-center gap-6 px-4 sm:px-6">
@@ -43,6 +53,10 @@ export function NavBar() {
             );
           })}
         </nav>
+
+        <div className="ml-auto">
+          <UserMenu />
+        </div>
       </div>
     </header>
   );
