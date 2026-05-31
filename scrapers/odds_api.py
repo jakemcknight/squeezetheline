@@ -14,10 +14,18 @@ import requests
 import pandas as pd
 from zoneinfo import ZoneInfo
 
-from config import ODDS_API_BASE, PREFERRED_BOOKMAKER, team_name_to_code, get_odds_api_key
+from config import (
+    ODDS_API_BASE, PREFERRED_BOOKMAKER, team_name_to_code, get_odds_api_key,
+    SPORTS, DEFAULT_SPORT,
+)
 
-# Map The Odds API market keys to the prop type names used in the analysis
+# Map The Odds API market keys to the prop type names used in the analysis.
+# Basketball keys feed the projection pipeline (the prop_type strings must match
+# STAT_CONFIGS in app.py). Baseball/football keys are display-only: those sports
+# have projections=False, so their props are shown as an odds table, not graded
+# against a projection. A market not in this map is skipped.
 MARKET_MAP = {
+    # --- Basketball (NBA/WNBA/NCAAB) ---
     "player_points": "Total Points",
     "player_rebounds": "Total Rebounds",
     "player_assists": "Total Assists",
@@ -25,7 +33,48 @@ MARKET_MAP = {
     "player_threes": "Total 3PM",
     "player_steals": "Total Steals",
     "player_blocks": "Total Blocks",
+    # --- Baseball (MLB) ---
+    "batter_hits": "Hits",
+    "batter_total_bases": "Total Bases",
+    "batter_home_runs": "Home Runs",
+    "batter_rbis": "RBIs",
+    "batter_runs_scored": "Runs",
+    "batter_stolen_bases": "Stolen Bases",
+    "batter_walks": "Walks",
+    "batter_singles": "Singles",
+    "batter_doubles": "Doubles",
+    "batter_triples": "Triples",
+    "batter_hits_runs_rbis": "Hits+Runs+RBIs",
+    "pitcher_strikeouts": "Pitcher Ks",
+    "pitcher_hits_allowed": "Hits Allowed",
+    "pitcher_earned_runs": "Earned Runs",
+    "pitcher_outs": "Outs",
+    "pitcher_walks": "Walks Allowed",
+    # --- Football (NFL/NCAAF) ---
+    "player_pass_yds": "Pass Yards",
+    "player_pass_tds": "Pass TDs",
+    "player_pass_completions": "Completions",
+    "player_pass_attempts": "Pass Attempts",
+    "player_pass_interceptions": "Interceptions",
+    "player_rush_yds": "Rush Yards",
+    "player_rush_attempts": "Rush Attempts",
+    "player_rush_tds": "Rush TDs",
+    "player_receptions": "Receptions",
+    "player_reception_yds": "Receiving Yards",
+    "player_reception_tds": "Receiving TDs",
+    "player_kicking_points": "Kicking Points",
 }
+
+# Odds API sport key -> the markets to request, taken from config.SPORTS so the
+# list stays in one place. Defaults to the NBA set for unknown keys.
+_MARKETS_BY_KEY = {cfg["key"]: cfg.get("markets", []) for cfg in SPORTS.values()}
+_DEFAULT_MARKETS = SPORTS[DEFAULT_SPORT]["markets"]
+
+
+def markets_for(sport_key: str = "basketball_nba") -> str:
+    """Return the comma-separated Odds API markets string for a sport."""
+    markets = _MARKETS_BY_KEY.get(sport_key) or _DEFAULT_MARKETS
+    return ",".join(markets)
 
 # Alternate-line markets (each line + odds) — these are SGP/parlay-friendly
 # markets where bookmakers offer multiple lines at different prices for the
@@ -38,8 +87,10 @@ ALT_MARKET_MAP = {
     "player_threes_alternate": "Alt 3PM",
 }
 
-# All markets we want, comma-separated for a single API call per event
-MARKETS = ",".join(MARKET_MAP.keys())
+# Default (NBA) markets string, kept for backward compatibility. Per-sport
+# requests use markets_for(sport_key); don't request every sport's markets at
+# once (each costs credits and most won't exist for a given event).
+MARKETS = markets_for(DEFAULT_SPORT)
 
 # Timezone for determining game dates (NBA schedule uses Eastern)
 EASTERN = ZoneInfo("America/New_York")
@@ -140,7 +191,7 @@ def get_event_props(event_id: str, all_books: bool = False,
     resp = requests.get(url, params={
         "apiKey": get_odds_api_key(),
         "regions": "us",
-        "markets": MARKETS,
+        "markets": markets_for(sport_key),
         "oddsFormat": "american",
     })
 

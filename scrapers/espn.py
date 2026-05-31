@@ -1,18 +1,24 @@
 """
-Generic ESPN basketball scrapers (injuries, rosters/positions, season stats).
+Generic ESPN scrapers (injuries, rosters/positions, season stats).
 
-ESPN exposes free, no-auth JSON endpoints for every basketball league under a
-common shape, differing only by a league slug:
-    nba | wnba | mens-college-basketball | womens-college-basketball
+ESPN exposes free, no-auth JSON endpoints for every league under a common
+shape. The path is /sports/{sport}/{league}, e.g.:
+    basketball/nba | basketball/wnba | basketball/mens-college-basketball
+    football/nfl   | football/college-football
+    baseball/mlb
 
-This module is league-parameterized so it can back any of them. It's the
-primary data source for sports that aren't covered by nba_api (e.g. WNBA).
+This module is sport+league-parameterized. The *injury* and *teams* endpoints
+share an identical JSON shape across all sports, so they work everywhere. The
+*positions* and *season-stats* parsers below are basketball-specific (they read
+basketball box-score fields) and are only called for basketball-backed sports
+via scrapers/sources.py. Football/baseball get odds + injuries but no
+projections — see config.SPORTS and scrapers/{mlb,nfl,ncaaf}.py.
 
-Cost note: ESPN has no single league-wide game-log endpoint, so building
-season stats means walking teams -> rosters -> per-athlete game logs. That's
-~one request per team plus one per player (≈200 calls for a 15-team WNBA
-slate). It's only run on an explicit admin "refresh" and the result is cached,
-but it is meaningfully slower than the NBA one-shot LeagueGameLog call.
+Cost note: ESPN has no single league-wide game-log endpoint, so building season
+stats means walking teams -> rosters -> per-athlete game logs. That's ~one
+request per team plus one per player (≈200 calls for a 15-team WNBA slate). It's
+only run on an explicit admin "refresh" and the result is cached, but it is
+meaningfully slower than the NBA one-shot LeagueGameLog call.
 """
 
 import datetime
@@ -22,10 +28,35 @@ import pandas as pd
 import requests
 from unidecode import unidecode
 
-# Site API — teams, rosters, injuries
-SITE_API = "https://site.api.espn.com/apis/site/v2/sports/basketball"
-# Web API — per-athlete game logs
-WEB_API = "https://site.web.api.espn.com/apis/common/v3/sports/basketball"
+# Site API (teams, rosters, injuries) and Web API (per-athlete game logs) roots.
+# The ESPN sport segment is derived from the league slug below.
+_SITE_API_ROOT = "https://site.api.espn.com/apis/site/v2/sports"
+_WEB_API_ROOT = "https://site.web.api.espn.com/apis/common/v3/sports"
+
+# ESPN groups leagues under a sport segment. Map each league slug we use to its
+# segment; unknown slugs default to basketball (preserves prior behavior).
+ESPN_SPORT_BY_LEAGUE = {
+    "nba": "basketball",
+    "wnba": "basketball",
+    "mens-college-basketball": "basketball",
+    "womens-college-basketball": "basketball",
+    "nfl": "football",
+    "college-football": "football",
+    "mlb": "baseball",
+}
+
+
+def _sport_for(league: str) -> str:
+    return ESPN_SPORT_BY_LEAGUE.get(league, "basketball")
+
+
+def _site_api(league: str) -> str:
+    return f"{_SITE_API_ROOT}/{_sport_for(league)}/{league}"
+
+
+def _web_api(league: str) -> str:
+    return f"{_WEB_API_ROOT}/{_sport_for(league)}/{league}"
+
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; squeezetheline/1.0)"}
 _TIMEOUT = 15
@@ -64,7 +95,7 @@ def get_injuries(league: str) -> pd.DataFrame:
     Same schema as scrapers.injuries.get_injury_report so callers are
     interchangeable.
     """
-    url = f"{SITE_API}/{league}/injuries"
+    url = f"{_site_api(league)}/injuries"
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT)
         resp.raise_for_status()
@@ -98,7 +129,7 @@ def get_injuries(league: str) -> pd.DataFrame:
 
 def get_teams(league: str) -> list[dict]:
     """Return [{id, abbreviation, displayName}] for every team in the league."""
-    url = f"{SITE_API}/{league}/teams"
+    url = f"{_site_api(league)}/teams"
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT)
         resp.raise_for_status()
@@ -135,7 +166,7 @@ def get_player_positions(league: str, session: Optional[requests.Session] = None
     sess = session or _session()
     rows = []
     for team in get_teams(league):
-        url = f"{SITE_API}/{league}/teams/{team['id']}/roster"
+        url = f"{_site_api(league)}/teams/{team['id']}/roster"
         try:
             resp = sess.get(url, timeout=_TIMEOUT)
             resp.raise_for_status()
@@ -189,7 +220,7 @@ def get_player_gamelog(league: str, athlete_id: str, season: int,
     threes, steals, blocks (player name/team are attached by the caller).
     """
     sess = session or _session()
-    url = f"{WEB_API}/{league}/athletes/{athlete_id}/gamelog"
+    url = f"{_web_api(league)}/athletes/{athlete_id}/gamelog"
     try:
         resp = sess.get(url, params={"season": season}, timeout=_TIMEOUT)
         resp.raise_for_status()
@@ -243,7 +274,7 @@ def get_season_stats(league: str, season: Optional[int] = None) -> pd.DataFrame:
 
     rows = []
     for team in get_teams(league):
-        roster_url = f"{SITE_API}/{league}/teams/{team['id']}/roster"
+        roster_url = f"{_site_api(league)}/teams/{team['id']}/roster"
         try:
             athletes = sess.get(roster_url, timeout=_TIMEOUT).json().get("athletes", [])
         except Exception:

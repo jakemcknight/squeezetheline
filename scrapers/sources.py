@@ -7,10 +7,15 @@ source based on config.SPORTS:
 
     stats_source = "nba_api"  -> scrapers/nba.py   (NBA)
     stats_source = "espn"     -> scrapers/wnba.py  (WNBA, via ESPN)
-    stats_source = None       -> empty frames      (e.g. NCAA, not yet wired)
+    stats_source = None       -> empty frames      (NCAAB/MLB/NFL/NCAAF — odds
+                                                    + injuries only; projections
+                                                    not wired, see scrapers/
+                                                    {ncaa,mlb,nfl,ncaaf}.py)
 
 Defense rankings and injuries are already sport-parameterized in their own
-modules; they're re-exposed here so app.py has a single import surface.
+modules; they're re-exposed here so app.py has a single import surface. Injuries
+work for every sport with an espn_league (basketball, football, baseball) via
+the sport-generalized scrapers/espn.py.
 """
 
 import pandas as pd

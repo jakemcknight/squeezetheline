@@ -707,12 +707,24 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False,
 
     results = {}
     if not has_stats:
-        # No player stats source for this sport (e.g. NCAA): we still fetched
-        # odds + injuries, but there's nothing to project against. Return empty
-        # per-stat frames; the UI shows a "projections unavailable" notice.
+        # No player stats source for this sport (NCAAB/MLB/NFL/NCAAF): we still
+        # fetched odds + injuries, but there's nothing to project against.
+        # Return empty per-stat frames so the projection board stays empty, and
+        # stash the raw lines + injuries under a sentinel summary key so the UI
+        # can render a sport-appropriate odds + injuries view instead.
         for stat, _ in STAT_CONFIGS:
             results[stat] = pd.DataFrame()
-        return events, results, {}
+        odds_records = (
+            analysis_props[["type", "player", "spread"]]
+            .dropna(subset=["player"])
+            .sort_values(["type", "player"])
+            .to_dict("records")
+            if not analysis_props.empty else []
+        )
+        inj_cols = [c for c in ("name", "team", "status_short", "comment") if c in injuries.columns]
+        inj_records = injuries[inj_cols].to_dict("records") if not injuries.empty else []
+        odds_only = {"__odds_only__": {"props": odds_records, "injuries": inj_records}}
+        return events, results, odds_only
 
     for stat, prop_type in STAT_CONFIGS:
         result = analyze_stat(stat, prop_type, df, props, todays_games, defense, game_date=date)
@@ -1899,8 +1911,9 @@ with st.sidebar:
         "Sport",
         options=_sport_names,
         index=_default_sport_idx,
-        help="NBA and WNBA have full projections. NCAA shows odds + injuries "
-             "but no projection edges yet (needs a player-stats source).",
+        help="NBA and WNBA have full projections. NCAA basketball, MLB, NFL and "
+             "NCAA football show odds + injuries only — the projection engine is "
+             "basketball-specific, so those sports have no projection edges yet.",
     )
     _sport_cfg = sport_config(selected_sport)
     sport_key = _sport_cfg["key"]
@@ -2002,15 +2015,62 @@ if cached is None:
 
 events, results, summaries = cached
 
-# Sports without a player-stats source (e.g. NCAA) have odds + injuries but no
-# projection edges. Make that explicit instead of showing empty boards.
+# Sports without a player-stats source (NCAAB/MLB/NFL/NCAAF) have odds +
+# injuries but no projection edges. Render a focused odds + injuries page for
+# them instead of the empty projection board, then stop.
 if not sport_config(selected_sport).get("projections", True):
+    _cfg = sport_config(selected_sport)
+    st.title(f"{selected_sport} — Lines & Injuries")
+    _cats = _cfg.get("stat_categories") or []
+    if _cats:
+        st.caption("Player-prop markets on the slate: " + ", ".join(_cats))
     st.info(
-        f"**{selected_sport}** currently has limited support: game odds and "
-        "injury reports are available, but projection edges (averages, hit "
-        "rates, confidence) require a player-stats source that isn't wired up "
-        "yet for this sport. See `scrapers/ncaa.py` for what's needed."
+        f"**{selected_sport}** has limited support: game odds and injury reports "
+        "are available, but projection edges (averages, hit rates, confidence) "
+        "require a player-stats source wired into the basketball-specific "
+        "projection engine, which isn't done for this sport yet. See "
+        "`scrapers/` for the per-sport stub explaining what's needed."
     )
+
+    _odds_only = (summaries or {}).get("__odds_only__", {})
+    _props = _odds_only.get("props", [])
+    _inj = _odds_only.get("injuries", [])
+
+    lines_tab, inj_tab = st.tabs(["Player Prop Lines", f"Injuries ({len(_inj)})"])
+    with lines_tab:
+        if not events:
+            st.warning("No games found on this date for this sport.")
+        elif not _props:
+            st.warning(
+                "No player-prop lines were returned for this slate. The Odds API "
+                "may not yet list props for these games, or the data predates the "
+                "sport being wired up — try **Fetch / Refresh Data** for a date "
+                "with an active slate."
+            )
+        else:
+            props_df = pd.DataFrame(_props).rename(
+                columns={"type": "Prop", "player": "Player", "spread": "Line"}
+            )
+            prop_types = sorted(props_df["Prop"].dropna().unique().tolist())
+            sel = st.multiselect("Filter by prop", prop_types, default=prop_types)
+            view = props_df[props_df["Prop"].isin(sel)] if sel else props_df
+            st.caption(f"{len(view)} lines across {len(prop_types)} prop types.")
+            st.dataframe(
+                view[["Player", "Prop", "Line"]],
+                use_container_width=True, hide_index=True,
+                column_config={"Line": st.column_config.NumberColumn("Line", format="%.1f")},
+            )
+    with inj_tab:
+        if not _inj:
+            st.info("No injuries currently listed by ESPN for this sport.")
+        else:
+            inj_df = pd.DataFrame(_inj).rename(columns={
+                "name": "Player", "team": "Team",
+                "status_short": "Status", "comment": "Note",
+            })
+            show_cols = [c for c in ("Player", "Team", "Status", "Note") if c in inj_df.columns]
+            st.dataframe(inj_df[show_cols], use_container_width=True, hide_index=True)
+    st.stop()
 
 
 # Recompute game_status in every result DataFrame against the CURRENT time

@@ -31,13 +31,27 @@ DATA_DIR = "data"
 #                   (only NBA, which has the historical box-score dataset)
 #   markets       — Odds API player-prop markets to request
 #
+# stat_categories — human-readable list of the headline stats for the sport,
+#                   shown in the UI. Drives nothing in the projection math
+#                   (which is basketball-specific); it's display metadata so
+#                   each sport reads correctly in the odds/markets view.
+#
 # Coverage today:
-#   NBA  — fully wired (nba_api stats, HashtagBasketball defense, ML models).
-#   WNBA — odds + ESPN injuries + ESPN player stats/positions. No
-#          defense-vs-position source (HashtagBasketball has no WNBA page) and
-#          no ML models (no historical dataset) — analysis degrades gracefully.
-#   NCAA — odds + ESPN injuries wired. No player season-stats source yet
-#          (~360 D1 teams; see scrapers/ncaa.py), so projections are off.
+#   NBA   — fully wired (nba_api stats, HashtagBasketball defense, ML models).
+#   WNBA  — odds + ESPN injuries + ESPN player stats/positions. No
+#           defense-vs-position source (HashtagBasketball has no WNBA page) and
+#           no ML models (no historical dataset) — analysis degrades gracefully.
+#   NCAAB — odds + ESPN injuries wired. No player season-stats source yet
+#           (~360 D1 teams; see scrapers/ncaa.py), so projections are off.
+#   MLB / NFL / NCAA Football — odds (sport-appropriate prop markets) + ESPN
+#           injuries + sport-aware logos/headshots. projections=False: the
+#           projection engine (analysis.py / data.py) and the Picks Board UI are
+#           built entirely around basketball box-score columns
+#           (points/rebounds/assists/threes/steals/blocks/pra), so there's no
+#           meaningful way to project baseball/football lines through it without
+#           a parallel stats pipeline. These sports are selectable and show
+#           lines + injuries; the projection board is intentionally stubbed.
+#           See scrapers/{mlb,nfl,ncaaf}.py for what a stats source would need.
 SPORTS = {
     "NBA": {
         "key": "basketball_nba",
@@ -51,6 +65,7 @@ SPORTS = {
             "player_points_rebounds_assists", "player_threes",
             "player_steals", "player_blocks",
         ],
+        "stat_categories": ["Points", "Rebounds", "Assists", "PRA", "3PM", "Steals", "Blocks"],
     },
     "WNBA": {
         "key": "basketball_wnba",
@@ -64,6 +79,7 @@ SPORTS = {
             "player_points_rebounds_assists", "player_threes",
             "player_steals", "player_blocks",
         ],
+        "stat_categories": ["Points", "Rebounds", "Assists", "PRA", "3PM", "Steals", "Blocks"],
     },
     "NCAA Men's Basketball": {
         "key": "basketball_ncaab",
@@ -75,17 +91,63 @@ SPORTS = {
         "espn_league": "mens-college-basketball",
         "ml_models": False,
         "markets": ["player_points", "player_rebounds", "player_assists"],
+        "stat_categories": ["Points", "Rebounds", "Assists"],
+    },
+    "MLB": {
+        "key": "baseball_mlb",
+        "active": True,
+        # Odds + ESPN injuries + logos work; the basketball-only projection
+        # engine doesn't, so projections are off. See scrapers/mlb.py.
+        "projections": False,
+        "stats_source": None,
+        "espn_league": "mlb",
+        "ml_models": False,
+        "markets": [
+            "batter_hits", "batter_total_bases", "batter_home_runs",
+            "batter_rbis", "batter_runs_scored", "batter_stolen_bases",
+            "pitcher_strikeouts", "pitcher_hits_allowed",
+            "pitcher_earned_runs", "pitcher_outs",
+        ],
+        "stat_categories": [
+            "Hits", "Total Bases", "Home Runs", "RBIs", "Runs", "Stolen Bases",
+            "Pitcher Ks", "Hits Allowed", "Earned Runs", "Outs",
+        ],
     },
     "NFL": {
         "key": "americanfootball_nfl",
-        "active": False,  # stub — different sport entirely, out of scope here
+        "active": True,
+        # Odds + ESPN injuries + logos work; projections off (basketball-only
+        # engine). See scrapers/nfl.py.
         "projections": False,
         "stats_source": None,
         "espn_league": "nfl",
         "ml_models": False,
         "markets": [
-            "player_pass_yds", "player_rush_yds", "player_receptions",
-            "player_anytime_td",
+            "player_pass_yds", "player_pass_tds", "player_pass_completions",
+            "player_pass_interceptions", "player_rush_yds",
+            "player_rush_attempts", "player_receptions", "player_reception_yds",
+        ],
+        "stat_categories": [
+            "Pass Yards", "Pass TDs", "Completions", "Interceptions",
+            "Rush Yards", "Rush Attempts", "Receptions", "Receiving Yards",
+        ],
+    },
+    "NCAA Football": {
+        "key": "americanfootball_ncaaf",
+        "active": True,
+        # Same shape as NFL. ~130 FBS teams, no team-name map (pass-through);
+        # ESPN logos resolve by team id, not abbreviation, so logos are limited.
+        "projections": False,
+        "stats_source": None,
+        "espn_league": "college-football",
+        "ml_models": False,
+        "markets": [
+            "player_pass_yds", "player_pass_tds", "player_rush_yds",
+            "player_rush_attempts", "player_receptions", "player_reception_yds",
+        ],
+        "stat_categories": [
+            "Pass Yards", "Pass TDs", "Rush Yards", "Rush Attempts",
+            "Receptions", "Receiving Yards",
         ],
     },
 }
@@ -257,11 +319,91 @@ WNBA_TEAM_NAME_TO_CODE = {
     "Washington Mystics": "WSH",
 }
 
+# MLB: The Odds API full team names → ESPN abbreviations (lowercased when used
+# to build ESPN logo URLs). Codes follow ESPN's MLB team set.
+# TODO: verify exact Odds API display strings against a live MLB slate; the A's
+# relocation means the Odds API may list "Athletics" rather than "Oakland
+# Athletics", so both are mapped.
+MLB_TEAM_NAME_TO_CODE = {
+    "Arizona Diamondbacks": "ARI",
+    "Atlanta Braves": "ATL",
+    "Baltimore Orioles": "BAL",
+    "Boston Red Sox": "BOS",
+    "Chicago Cubs": "CHC",
+    "Chicago White Sox": "CHW",
+    "Cincinnati Reds": "CIN",
+    "Cleveland Guardians": "CLE",
+    "Colorado Rockies": "COL",
+    "Detroit Tigers": "DET",
+    "Houston Astros": "HOU",
+    "Kansas City Royals": "KC",
+    "Los Angeles Angels": "LAA",
+    "Los Angeles Dodgers": "LAD",
+    "Miami Marlins": "MIA",
+    "Milwaukee Brewers": "MIL",
+    "Minnesota Twins": "MIN",
+    "New York Mets": "NYM",
+    "New York Yankees": "NYY",
+    "Athletics": "OAK",
+    "Oakland Athletics": "OAK",
+    "Philadelphia Phillies": "PHI",
+    "Pittsburgh Pirates": "PIT",
+    "San Diego Padres": "SD",
+    "San Francisco Giants": "SF",
+    "Seattle Mariners": "SEA",
+    "St. Louis Cardinals": "STL",
+    "Tampa Bay Rays": "TB",
+    "Texas Rangers": "TEX",
+    "Toronto Blue Jays": "TOR",
+    "Washington Nationals": "WSH",
+}
+
+# NFL: The Odds API full team names → ESPN abbreviations. Codes follow ESPN's
+# NFL team set (JAX, LAR/LAC, LV, WSH).
+# TODO: verify exact Odds API display strings against a live NFL slate.
+NFL_TEAM_NAME_TO_CODE = {
+    "Arizona Cardinals": "ARI",
+    "Atlanta Falcons": "ATL",
+    "Baltimore Ravens": "BAL",
+    "Buffalo Bills": "BUF",
+    "Carolina Panthers": "CAR",
+    "Chicago Bears": "CHI",
+    "Cincinnati Bengals": "CIN",
+    "Cleveland Browns": "CLE",
+    "Dallas Cowboys": "DAL",
+    "Denver Broncos": "DEN",
+    "Detroit Lions": "DET",
+    "Green Bay Packers": "GB",
+    "Houston Texans": "HOU",
+    "Indianapolis Colts": "IND",
+    "Jacksonville Jaguars": "JAX",
+    "Kansas City Chiefs": "KC",
+    "Las Vegas Raiders": "LV",
+    "Los Angeles Chargers": "LAC",
+    "Los Angeles Rams": "LAR",
+    "Miami Dolphins": "MIA",
+    "Minnesota Vikings": "MIN",
+    "New England Patriots": "NE",
+    "New Orleans Saints": "NO",
+    "New York Giants": "NYG",
+    "New York Jets": "NYJ",
+    "Philadelphia Eagles": "PHI",
+    "Pittsburgh Steelers": "PIT",
+    "San Francisco 49ers": "SF",
+    "Seattle Seahawks": "SEA",
+    "Tampa Bay Buccaneers": "TB",
+    "Tennessee Titans": "TEN",
+    "Washington Commanders": "WSH",
+}
+
 # The Odds API team-name → code map per sport key. Sports without a map (e.g.
 # NCAA, with hundreds of teams) fall back to passing the name through unchanged.
 TEAM_NAME_TO_CODE_BY_SPORT = {
     "basketball_nba": TEAM_NAME_TO_CODE,
     "basketball_wnba": WNBA_TEAM_NAME_TO_CODE,
+    "baseball_mlb": MLB_TEAM_NAME_TO_CODE,
+    "americanfootball_nfl": NFL_TEAM_NAME_TO_CODE,
+    # americanfootball_ncaaf: no map (~130 FBS teams) → names pass through.
 }
 
 
