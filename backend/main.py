@@ -10,6 +10,7 @@ Run locally:
 """
 from __future__ import annotations
 
+import os
 from typing import List, Optional
 
 # Load backend/.env (e.g. ODDS_API_KEY) before the providers package decides
@@ -32,15 +33,25 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# Origins are configurable via the ALLOWED_ORIGINS env var (comma-separated)
+# so production can add domains without a code change. Local dev defaults and
+# the known Vercel production domains are always included.
+_DEFAULT_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://squeezetheline.vercel.app",
+    "https://squeezetheline-6ee9heam0-jake-mcknights-projects.vercel.app",
+]
+_env_origins = [
+    o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+allowed_origins = list(dict.fromkeys(_DEFAULT_ORIGINS + _env_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://squeezetheline.vercel.app",
-    ],
+    allow_origins=allowed_origins,
     # Cover Vercel preview/branch deploys (e.g. squeezetheline-<hash>-*.vercel.app).
-    allow_origin_regex=r"https://squeezetheline-[\w-]+\.vercel\.app",
+    allow_origin_regex=r"https://squeezetheline[\w-]*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
