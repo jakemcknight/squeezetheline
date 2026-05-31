@@ -1,3 +1,17 @@
+# --- API layer ---
 fastapi==0.110.0
 uvicorn[standard]==0.29.0
 pydantic==2.6.4
+
+# --- Live data pipeline (repo-root scrapers + analysis) ---
+# Pinned loosely for Python 3.9 compatibility (the root modules use
+# `from __future__ import annotations` for 3.9 support).
+pandas>=2.0,<2.3
+numpy<2.1
+requests>=2.32
+beautifulsoup4>=4.12
+lxml>=5.1
+unidecode>=1.3
+python-dotenv>=1.0
+# nba_api is only needed if the NBA stats source is exercised (LeagueGameLog).
+nba_api>=1.4

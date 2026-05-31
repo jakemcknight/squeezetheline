@@ -12,6 +12,14 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+# Load backend/.env (e.g. ODDS_API_KEY) before the providers package decides
+# between the live and mock data sources. No-op if python-dotenv isn't present.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
