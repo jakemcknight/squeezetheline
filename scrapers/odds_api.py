@@ -14,7 +14,7 @@ import requests
 import pandas as pd
 from zoneinfo import ZoneInfo
 
-from config import ODDS_API_BASE, PREFERRED_BOOKMAKER, TEAM_NAME_TO_CODE, get_odds_api_key
+from config import ODDS_API_BASE, PREFERRED_BOOKMAKER, team_name_to_code, get_odds_api_key
 
 # Map The Odds API market keys to the prop type names used in the analysis
 MARKET_MAP = {
@@ -50,26 +50,32 @@ class OddsAPIQuotaError(Exception):
     pass
 
 
-def get_nba_events() -> list[dict]:
+def get_events(sport_key: str = "basketball_nba") -> list[dict]:
     """
-    Fetch all upcoming NBA events (games). This endpoint is free — no credit cost.
+    Fetch all upcoming events (games) for a sport. This endpoint is free — no
+    credit cost.
 
     Returns a list of dicts with keys: id, home_team, away_team, commence_time.
     """
-    url = f"{ODDS_API_BASE}/sports/basketball_nba/events"
+    url = f"{ODDS_API_BASE}/sports/{sport_key}/events"
     resp = requests.get(url, params={"apiKey": get_odds_api_key()})
     resp.raise_for_status()
     return resp.json()
 
 
-def get_events_for_date(date: datetime.date = None) -> list[dict]:
+# Backwards-compatible alias (NBA was the only sport originally).
+def get_nba_events() -> list[dict]:
+    return get_events("basketball_nba")
+
+
+def get_events_for_date(date: datetime.date = None, sport_key: str = "basketball_nba") -> list[dict]:
     """
     Return only the events whose game time falls on the given date (Eastern time).
     Defaults to today.
     """
     if date is None:
         date = datetime.date.today()
-    all_events = get_nba_events()
+    all_events = get_events(sport_key)
     filtered = []
     for event in all_events:
         utc_time = datetime.datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
@@ -79,13 +85,14 @@ def get_events_for_date(date: datetime.date = None) -> list[dict]:
     return filtered
 
 
-def get_event_alt_props(event_id: str, player: str, stat_market: str) -> list[dict]:
+def get_event_alt_props(event_id: str, player: str, stat_market: str,
+                        sport_key: str = "basketball_nba") -> list[dict]:
     """Fetch alternate-line offerings for a single event + market.
 
     Returns a list of {line, price, book} sorted by line.
     Useful for SGP-style alternate-line shopping on the player detail page.
     """
-    url = f"{ODDS_API_BASE}/sports/basketball_nba/events/{event_id}/odds"
+    url = f"{ODDS_API_BASE}/sports/{sport_key}/events/{event_id}/odds"
     try:
         resp = requests.get(url, params={
             "apiKey": get_odds_api_key(),
@@ -118,7 +125,8 @@ def get_event_alt_props(event_id: str, player: str, stat_market: str) -> list[di
     return rows
 
 
-def get_event_props(event_id: str, all_books: bool = False) -> list[dict]:
+def get_event_props(event_id: str, all_books: bool = False,
+                    sport_key: str = "basketball_nba") -> list[dict]:
     """
     Fetch player prop lines for a single event.
 
@@ -128,7 +136,7 @@ def get_event_props(event_id: str, all_books: bool = False) -> list[dict]:
 
     Returns a list of dicts: {type, player, spread, book?}.
     """
-    url = f"{ODDS_API_BASE}/sports/basketball_nba/events/{event_id}/odds"
+    url = f"{ODDS_API_BASE}/sports/{sport_key}/events/{event_id}/odds"
     resp = requests.get(url, params={
         "apiKey": get_odds_api_key(),
         "regions": "us",
@@ -202,49 +210,50 @@ def get_event_props(event_id: str, all_books: bool = False) -> list[dict]:
     return props
 
 
-def _team_code(full_name: str) -> str:
-    """Convert a full team name to its 3-letter code."""
-    return TEAM_NAME_TO_CODE.get(full_name, full_name)
+def _team_code(full_name: str, sport_key: str = "basketball_nba") -> str:
+    """Convert a full team name to its short code for the given sport."""
+    return team_name_to_code(full_name, sport_key)
 
 
-def get_todays_teams(date: datetime.date = None) -> list[str]:
+def get_todays_teams(date: datetime.date = None, sport_key: str = "basketball_nba") -> list[str]:
     """Return a list of team codes playing on the given date."""
-    events = get_events_for_date(date)
+    events = get_events_for_date(date, sport_key)
     teams = []
     for event in events:
-        teams.append(_team_code(event["away_team"]))
-        teams.append(_team_code(event["home_team"]))
+        teams.append(_team_code(event["away_team"], sport_key))
+        teams.append(_team_code(event["home_team"], sport_key))
     return teams
 
 
-def get_todays_games(date: datetime.date = None) -> dict[str, str]:
+def get_todays_games(date: datetime.date = None, sport_key: str = "basketball_nba") -> dict[str, str]:
     """Return a dict mapping each team code to its opponent for the given date."""
-    events = get_events_for_date(date)
+    events = get_events_for_date(date, sport_key)
     games = {}
     for event in events:
-        away = _team_code(event["away_team"])
-        home = _team_code(event["home_team"])
+        away = _team_code(event["away_team"], sport_key)
+        home = _team_code(event["home_team"], sport_key)
         games[away] = home
         games[home] = away
     return games
 
 
-def get_game_times(date: datetime.date = None) -> dict[str, str]:
+def get_game_times(date: datetime.date = None, sport_key: str = "basketball_nba") -> dict[str, str]:
     """Return a dict mapping each team code to its game's commence_time (ISO string)."""
-    events = get_events_for_date(date)
+    events = get_events_for_date(date, sport_key)
     times = {}
     for event in events:
         commence = event.get("commence_time", "")
         if not commence:
             continue
-        away = _team_code(event["away_team"])
-        home = _team_code(event["home_team"])
+        away = _team_code(event["away_team"], sport_key)
+        home = _team_code(event["home_team"], sport_key)
         times[away] = commence
         times[home] = commence
     return times
 
 
-def get_all_props(date: datetime.date = None, all_books: bool = False) -> pd.DataFrame:
+def get_all_props(date: datetime.date = None, all_books: bool = False,
+                  sport_key: str = "basketball_nba") -> pd.DataFrame:
     """
     Fetch player prop lines for all games on the given date.
 
@@ -255,7 +264,7 @@ def get_all_props(date: datetime.date = None, all_books: bool = False) -> pd.Dat
     Returns a DataFrame with columns: type, player, spread (and book, price
     when `all_books=True`).
     """
-    events = get_events_for_date(date)
+    events = get_events_for_date(date, sport_key)
     print(f"  Found {len(events)} games on {date or datetime.date.today()}")
 
     all_props = []
@@ -263,7 +272,7 @@ def get_all_props(date: datetime.date = None, all_books: bool = False) -> pd.Dat
         home = event.get("home_team", "")
         away = event.get("away_team", "")
         print(f"  Fetching props: {away} @ {home}...")
-        event_props = get_event_props(event["id"], all_books=all_books)
+        event_props = get_event_props(event["id"], all_books=all_books, sport_key=sport_key)
         all_props.extend(event_props)
 
     print(f"  {len(all_props)} total prop lines fetched")

@@ -8,9 +8,13 @@ import pandas as pd
 import altair as alt
 
 from scrapers.odds_api import get_todays_games, get_all_props, get_events_for_date, get_game_times, OddsAPIQuotaError
-from scrapers.nba import get_current_season_stats, get_player_positions
-from scrapers.basketball_ref import get_defense_by_position
-from scrapers.injuries import get_injury_report
+from scrapers.sources import (
+    get_season_stats,
+    get_positions,
+    get_defense_by_position,
+    get_injury_report,
+)
+from config import SPORTS, DEFAULT_SPORT, active_sports, sport_config
 from picks import (
     add_pick,
     remove_pick,
@@ -568,25 +572,32 @@ CACHE_DIR = os.path.join(DATA_DIR, "daily_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
-def _cache_path(date: datetime.date) -> str:
-    return os.path.join(CACHE_DIR, f"{date}.json")
+def _cache_path(date: datetime.date, sport_key: str = "basketball_nba") -> str:
+    # NBA keeps the original bare-date filename for backward compatibility with
+    # already-cached slates; other sports get a sport-suffixed file so they
+    # don't collide on the same date.
+    if sport_key == "basketball_nba":
+        return os.path.join(CACHE_DIR, f"{date}.json")
+    return os.path.join(CACHE_DIR, f"{date}__{sport_key}.json")
 
 
-def save_daily_results(events, results, summaries, date: datetime.date):
+def save_daily_results(events, results, summaries, date: datetime.date,
+                       sport_key: str = "basketball_nba"):
     """Save fetched results to disk."""
     payload = {
         "date": str(date),
+        "sport_key": sport_key,
         "events": events,
         "results": {stat: df.to_json() for stat, df in results.items()},
         "summaries": summaries,
     }
-    with open(_cache_path(date), "w") as f:
+    with open(_cache_path(date, sport_key), "w") as f:
         json.dump(payload, f)
 
 
-def load_daily_results(date: datetime.date):
+def load_daily_results(date: datetime.date, sport_key: str = "basketball_nba"):
     """Load cached results from disk. Returns (events, results, summaries) or None."""
-    path = _cache_path(date)
+    path = _cache_path(date, sport_key)
     if not os.path.exists(path):
         return None
     with open(path) as f:
@@ -597,18 +608,28 @@ def load_daily_results(date: datetime.date):
     return events, results, summaries
 
 
-def fetch_fresh_data(date: datetime.date, all_books: bool = False):
+def fetch_fresh_data(date: datetime.date, all_books: bool = False,
+                     sport_key: str = "basketball_nba"):
     """Hit all APIs and run the full analysis pipeline for the given date.
 
     When `all_books=True`, also pull props from every US bookmaker so the
     player detail page can show line shopping comparisons.
+
+    `sport_key` selects the Odds API sport and the matching stats/positions/
+    defense/injury sources (see scrapers/sources.py). Sports without a stats
+    source (e.g. NCAA) produce an empty `df`, which yields empty analysis
+    results — the caller shows odds/injuries but no projection edges.
     """
-    events = get_events_for_date(date)
-    todays_games = get_todays_games(date)
-    stats = get_current_season_stats()
-    positions = get_player_positions()
+    events = get_events_for_date(date, sport_key)
+    todays_games = get_todays_games(date, sport_key)
+    stats = get_season_stats(sport_key)
+    positions = get_positions(sport_key)
+    # prepare_stats is safe on an empty frame (it returns an empty frame with
+    # the expected columns), but a sport with no stats source has nothing to
+    # analyze, so we skip the projection pipeline below for it.
     df = prepare_stats(stats, positions)
-    raw_props = get_all_props(date, all_books=all_books)
+    has_stats = not df.empty
+    raw_props = get_all_props(date, all_books=all_books, sport_key=sport_key)
     # For the main analysis, dedupe to one line per player/stat (best/median).
     # Save the raw multi-book table separately for the detail view.
     if all_books and "book" in raw_props.columns:
@@ -628,7 +649,7 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False):
     player_id_map = dict(zip(player_meta["name"], player_meta["player_id"]))
 
     # Injury report from ESPN
-    injuries = get_injury_report()
+    injuries = get_injury_report(sport_key)
     injury_join = (
         injuries[["name", "status_short", "comment"]].drop_duplicates(subset="name")
         if not injuries.empty
@@ -663,7 +684,7 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False):
             }
 
     # Game tipoff times per team (so we can flag in-progress / completed games)
-    game_times = get_game_times(date)
+    game_times = get_game_times(date, sport_key)
     now_utc = pd.Timestamp.now(tz="UTC")
 
     def _classify(team_code: str) -> dict:
@@ -685,6 +706,14 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False):
             return {"game_status": "unknown", "tipoff": commence}
 
     results = {}
+    if not has_stats:
+        # No player stats source for this sport (e.g. NCAA): we still fetched
+        # odds + injuries, but there's nothing to project against. Return empty
+        # per-stat frames; the UI shows a "projections unavailable" notice.
+        for stat, _ in STAT_CONFIGS:
+            results[stat] = pd.DataFrame()
+        return events, results, {}
+
     for stat, prop_type in STAT_CONFIGS:
         result = analyze_stat(stat, prop_type, df, props, todays_games, defense, game_date=date)
         result = result.merge(player_urls, on="name", how="left")
@@ -763,7 +792,7 @@ COLUMN_CONFIG = {
     "status_short": st.column_config.TextColumn("Inj", help="Injury status (OUT/DBT/Q/DTD/PROB)"),
     "teammates_out": st.column_config.TextColumn("Inj Impact", help="How many of this player's teammates are OUT (starters specifically). More teammates out usually = more minutes/usage available for this player."),
     "starter": st.column_config.CheckboxColumn("Starter", help="Top 5 mpg on team in last 10 games"),
-    "player_url": st.column_config.LinkColumn("Profile", display_text="NBA.com"),
+    "player_url": st.column_config.LinkColumn("Profile", display_text="Profile"),
     "team-code": st.column_config.TextColumn("Team"),
     "opponent": st.column_config.TextColumn("Opp"),
     "position": st.column_config.TextColumn("Pos"),
@@ -1011,9 +1040,10 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                 break
 
     from config import team_logo_url, player_photo_url
-    photo = player_photo_url(player_id) if player_id else ""
-    team_logo = team_logo_url(team)
-    opp_logo = team_logo_url(opponent_code) if opponent_code else ""
+    _sk = st.session_state.get("sport_key", "basketball_nba")
+    photo = player_photo_url(player_id, _sk) if player_id else ""
+    team_logo = team_logo_url(team, _sk)
+    opp_logo = team_logo_url(opponent_code, _sk) if opponent_code else ""
 
     # Hero header: player photo on left, name + team-vs-opp on right
     hero_l, hero_r = st.columns([1, 3], gap="medium")
@@ -1092,7 +1122,8 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             if not row.empty and row.iloc[0].get("game_status") == "live":
                 is_player_live = True
                 break
-    if is_player_live:
+    # Live box scores come from nba_api's live scoreboard, which is NBA-only.
+    if is_player_live and st.session_state.get("sport_key", "basketball_nba") == "basketball_nba":
         try:
             from scrapers.nba import get_live_box_score
             live = get_live_box_score(name)
@@ -1342,7 +1373,12 @@ def render_player_detail(name: str, summaries: dict, results: dict):
         pass
 
     # --- ML model predictions (if models are trained) ---
+    # XGBoost models are trained only on the NBA historical dataset, so skip
+    # them for other sports (their players aren't in the model's encodings).
+    _ml_supported = sport_config(st.session_state.get("sport", DEFAULT_SPORT)).get("ml_models")
     try:
+        if not _ml_supported:
+            raise RuntimeError("ML models not available for this sport")
         from model import predict_player_stat, load_model
         ml_rows = []
         for stat_key, label, _ in active_stats:
@@ -1443,14 +1479,14 @@ def render_player_detail(name: str, summaries: dict, results: dict):
             if st.button("Fetch alt lines", key=f"alt_fetch_{name}"):
                 alt_market = next((k for k, v in alt_stat_choices if v == alt_label), None)
                 # Find this player's event ID
-                events_today = get_events_for_date(selected_date)
+                events_today = get_events_for_date(selected_date, sport_key)
                 player_team = summary.get("team", "")
                 alt_event = None
                 # Iterate events and find the one whose home/away team matches
-                from config import TEAM_NAME_TO_CODE
+                from config import team_name_to_code
                 for ev in events_today:
-                    home = TEAM_NAME_TO_CODE.get(ev["home_team"], ev["home_team"])
-                    away = TEAM_NAME_TO_CODE.get(ev["away_team"], ev["away_team"])
+                    home = team_name_to_code(ev["home_team"], sport_key)
+                    away = team_name_to_code(ev["away_team"], sport_key)
                     if player_team in (home, away):
                         alt_event = ev
                         break
@@ -1458,7 +1494,7 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                     st.error(f"Couldn't find tonight's event for {player_team}.")
                 elif alt_market:
                     with st.spinner("Fetching alt lines..."):
-                        alts = get_event_alt_props(alt_event["id"], name, alt_market)
+                        alts = get_event_alt_props(alt_event["id"], name, alt_market, sport_key=sport_key)
                     if not alts:
                         st.info("No alt lines returned (may not be offered yet).")
                     else:
@@ -1856,6 +1892,23 @@ with st.sidebar:
             st.rerun()
         st.divider()
 
+    # --- Sport selector ---
+    _sport_names = list(active_sports().keys())
+    _default_sport_idx = _sport_names.index(DEFAULT_SPORT) if DEFAULT_SPORT in _sport_names else 0
+    selected_sport = st.selectbox(
+        "Sport",
+        options=_sport_names,
+        index=_default_sport_idx,
+        help="NBA and WNBA have full projections. NCAA shows odds + injuries "
+             "but no projection edges yet (needs a player-stats source).",
+    )
+    _sport_cfg = sport_config(selected_sport)
+    sport_key = _sport_cfg["key"]
+    st.session_state["sport"] = selected_sport
+    st.session_state["sport_key"] = sport_key
+    if not _sport_cfg.get("projections", True):
+        st.caption("⚠️ Limited support: odds & injuries only — no projections for this sport yet.")
+
     selected_date = st.date_input("Game Date", value=datetime.date.today())
     st.session_state["selected_date"] = selected_date
 
@@ -1875,7 +1928,7 @@ with date_col:
 st.write("")  # small spacer
 
 # --- Load cached data or prompt to fetch ---
-cached = load_daily_results(selected_date)
+cached = load_daily_results(selected_date, sport_key)
 
 with st.sidebar:
     if cached:
@@ -1886,10 +1939,12 @@ with st.sidebar:
     if is_admin():
         if st.button("Fetch / Refresh Data", type="primary", use_container_width=True):
             try:
-                with st.spinner("Fetching from NBA.com + The Odds API..."):
+                with st.spinner(f"Fetching {selected_sport} data from The Odds API + stats sources..."):
                     shop = st.session_state.get("line_shopping", False)
-                    events, results, summaries = fetch_fresh_data(selected_date, all_books=shop)
-                    save_daily_results(events, results, summaries, selected_date)
+                    events, results, summaries = fetch_fresh_data(
+                        selected_date, all_books=shop, sport_key=sport_key
+                    )
+                    save_daily_results(events, results, summaries, selected_date, sport_key)
                     st.cache_data.clear()
                     st.session_state.pop("selected_player", None)
                 st.rerun()
@@ -1946,6 +2001,16 @@ if cached is None:
     st.stop()
 
 events, results, summaries = cached
+
+# Sports without a player-stats source (e.g. NCAA) have odds + injuries but no
+# projection edges. Make that explicit instead of showing empty boards.
+if not sport_config(selected_sport).get("projections", True):
+    st.info(
+        f"**{selected_sport}** currently has limited support: game odds and "
+        "injury reports are available, but projection edges (averages, hit "
+        "rates, confidence) require a player-stats source that isn't wired up "
+        "yet for this sport. See `scrapers/ncaa.py` for what's needed."
+    )
 
 
 # Recompute game_status in every result DataFrame against the CURRENT time
@@ -2123,12 +2188,12 @@ if nav_choice == "What-If":
     # Pull the injury report so we can label the OUT-player dropdown.
     # Cache for 5 minutes so flipping selectors doesn't re-hit ESPN.
     @st.cache_data(ttl=300)
-    def _whatif_injuries():
+    def _whatif_injuries(sk: str):
         from scrapers.injuries import get_injury_report
-        inj = get_injury_report()
+        inj = get_injury_report(sk)
         return dict(zip(inj["name"], inj["status_short"])) if not inj.empty else {}
 
-    injury_status = _whatif_injuries()
+    injury_status = _whatif_injuries(sport_key)
 
     c1, c2 = st.columns(2)
     with c1:

@@ -21,8 +21,24 @@ def get_player_positions() -> pd.DataFrame:
     return pd.DataFrame(positions)
 
 
-def get_defense_by_position() -> pd.DataFrame:
-    """Scrape defense-vs-position rankings from HashtagBasketball."""
+DEFENSE_COLUMNS = ["position", "team", "team_rank", "stat", "value", "rank"]
+
+
+def get_defense_by_position(sport_key: str = "basketball_nba") -> pd.DataFrame:
+    """Scrape defense-vs-position rankings from HashtagBasketball (NBA only).
+
+    HashtagBasketball only publishes an NBA defense-vs-position page
+    (https://hashtagbasketball.com/wnba-defense-vs-position 404s, and there's
+    no college equivalent). For non-NBA sports we return an empty frame with
+    the expected columns; analysis.analyze_stat treats a missing defense rank
+    as neutral (the per-row score guards on pd.notna(rank)), so projections
+    still work — they just don't get the matchup bonus.
+
+    TODO: find a defense-vs-position source for WNBA/NCAA (would likely mean
+    computing it ourselves from opponent box scores once a stats feed exists).
+    """
+    if sport_key != "basketball_nba":
+        return pd.DataFrame(columns=DEFENSE_COLUMNS)
     response = requests.get("https://hashtagbasketball.com/nba-defense-vs-position")
     soup = BeautifulSoup(response.text, "lxml")
     table = soup.find_all(

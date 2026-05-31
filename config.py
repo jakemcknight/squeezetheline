@@ -16,14 +16,36 @@ BACKFILL_COOLDOWN_SECONDS = 3600
 DATA_DIR = "data"
 
 # --- Sport configuration ---
-# The Odds API supports many sports. Players, line types, and historical
-# data sources differ per sport. NBA is fully wired up; the others are
-# stubs that show in the sport selector but need per-sport scrapers
-# (player stats, injury reports, defense rankings) before they're usable.
+# The Odds API supports many sports. Players, line types, and data sources
+# differ per sport, so each sport declares which sources back it. Per-sport
+# fields:
+#   key          — The Odds API sport key (used for odds/props)
+#   active        — whether the sport shows in the sport selector
+#   projections   — whether we can produce stat projections (needs a player
+#                   season-stats source). Sports with projections=False still
+#                   show odds + injuries but no Picks-Board edge analysis.
+#   stats_source  — which scraper backs season stats / positions
+#                   ("nba_api" | "espn" | None)
+#   espn_league   — ESPN league slug for injuries/rosters (None if unsupported)
+#   ml_models     — whether trained XGBoost models exist for this sport
+#                   (only NBA, which has the historical box-score dataset)
+#   markets       — Odds API player-prop markets to request
+#
+# Coverage today:
+#   NBA  — fully wired (nba_api stats, HashtagBasketball defense, ML models).
+#   WNBA — odds + ESPN injuries + ESPN player stats/positions. No
+#          defense-vs-position source (HashtagBasketball has no WNBA page) and
+#          no ML models (no historical dataset) — analysis degrades gracefully.
+#   NCAA — odds + ESPN injuries wired. No player season-stats source yet
+#          (~360 D1 teams; see scrapers/ncaa.py), so projections are off.
 SPORTS = {
     "NBA": {
         "key": "basketball_nba",
         "active": True,
+        "projections": True,
+        "stats_source": "nba_api",
+        "espn_league": "nba",
+        "ml_models": True,
         "markets": [
             "player_points", "player_rebounds", "player_assists",
             "player_points_rebounds_assists", "player_threes",
@@ -32,17 +54,35 @@ SPORTS = {
     },
     "WNBA": {
         "key": "basketball_wnba",
-        "active": False,  # stub
-        "markets": ["player_points", "player_rebounds", "player_assists"],
+        "active": True,
+        "projections": True,
+        "stats_source": "espn",
+        "espn_league": "wnba",
+        "ml_models": False,
+        "markets": [
+            "player_points", "player_rebounds", "player_assists",
+            "player_points_rebounds_assists", "player_threes",
+            "player_steals", "player_blocks",
+        ],
     },
     "NCAA Men's Basketball": {
         "key": "basketball_ncaab",
-        "active": False,  # stub
+        "active": True,
+        # No scalable player season-stats source wired yet, so we can pull
+        # odds + injuries but can't compute projection edges. See scrapers/ncaa.py.
+        "projections": False,
+        "stats_source": None,
+        "espn_league": "mens-college-basketball",
+        "ml_models": False,
         "markets": ["player_points", "player_rebounds", "player_assists"],
     },
     "NFL": {
         "key": "americanfootball_nfl",
-        "active": False,  # stub
+        "active": False,  # stub — different sport entirely, out of scope here
+        "projections": False,
+        "stats_source": None,
+        "espn_league": "nfl",
+        "ml_models": False,
         "markets": [
             "player_pass_yds", "player_rush_yds", "player_receptions",
             "player_anytime_td",
@@ -51,6 +91,21 @@ SPORTS = {
 }
 
 DEFAULT_SPORT = "NBA"
+
+
+def active_sports() -> dict:
+    """Return the subset of SPORTS that should appear in the sport selector."""
+    return {name: cfg for name, cfg in SPORTS.items() if cfg.get("active")}
+
+
+def sport_config(name: str) -> dict:
+    """Look up a sport's config by display name, falling back to the default."""
+    return SPORTS.get(name, SPORTS[DEFAULT_SPORT])
+
+
+def sport_key_for(name: str) -> str:
+    """Return the Odds API sport key for a sport display name."""
+    return sport_config(name).get("key", SPORTS[DEFAULT_SPORT]["key"])
 
 
 # --- The Odds API (player props) ---
@@ -105,19 +160,42 @@ NBA_TEAM_IDS = {
 }
 
 
-def team_logo_url(team_code: str) -> str:
-    """Return the NBA.com primary logo URL for a 3-letter team code, or '' if unknown."""
-    team_id = NBA_TEAM_IDS.get(team_code)
-    if not team_id:
+# ESPN league slug per Odds API sport key — used to build ESPN logo/headshot
+# URLs for sports whose stats come from ESPN (e.g. WNBA).
+ESPN_LEAGUE_BY_KEY = {cfg["key"]: cfg.get("espn_league") for cfg in SPORTS.values()}
+
+
+def team_logo_url(team_code: str, sport_key: str = "basketball_nba") -> str:
+    """Return a team-logo URL for a team code, or '' if unknown.
+
+    NBA logos come from cdn.nba.com (by numeric team id); other ESPN-backed
+    sports use ESPN's logo CDN (by lowercase abbreviation).
+    """
+    if sport_key == "basketball_nba":
+        team_id = NBA_TEAM_IDS.get(team_code)
+        if not team_id:
+            return ""
+        return f"https://cdn.nba.com/logos/nba/{team_id}/global/L/logo.svg"
+    league = ESPN_LEAGUE_BY_KEY.get(sport_key)
+    if not league or not team_code:
         return ""
-    return f"https://cdn.nba.com/logos/nba/{team_id}/global/L/logo.svg"
+    return f"https://a.espncdn.com/i/teamlogos/{league}/500/{team_code.lower()}.png"
 
 
-def player_photo_url(player_id: int | str) -> str:
-    """Return the NBA.com headshot URL (1040x760) for a player ID."""
+def player_photo_url(player_id: int | str, sport_key: str = "basketball_nba") -> str:
+    """Return a player-headshot URL for a player id, or '' if unknown.
+
+    NBA ids come from nba_api (cdn.nba.com headshots); ESPN-backed sports use
+    ESPN athlete ids and ESPN's headshot CDN.
+    """
     if not player_id:
         return ""
-    return f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
+    if sport_key == "basketball_nba":
+        return f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
+    league = ESPN_LEAGUE_BY_KEY.get(sport_key)
+    if not league:
+        return ""
+    return f"https://a.espncdn.com/i/headshots/{league}/players/full/{player_id}.png"
 
 
 # The Odds API full team names → 3-letter codes
@@ -153,6 +231,48 @@ TEAM_NAME_TO_CODE = {
     "Utah Jazz": "UTA",
     "Washington Wizards": "WAS",
 }
+
+# WNBA: The Odds API full team names → ESPN team abbreviations (so odds-derived
+# team codes match the codes ESPN stats/positions use, keeping opponent and
+# game-status mapping consistent). Codes verified against ESPN's WNBA teams
+# endpoint. Includes the 2025–26 expansion clubs (Golden State, Toronto,
+# Portland) so the map stays valid as the league grows.
+# TODO: verify the exact Odds API display strings once a WNBA slate is live
+# (these follow ESPN's "City Nickname" naming, which the Odds API also uses).
+WNBA_TEAM_NAME_TO_CODE = {
+    "Atlanta Dream": "ATL",
+    "Chicago Sky": "CHI",
+    "Connecticut Sun": "CON",
+    "Dallas Wings": "DAL",
+    "Golden State Valkyries": "GS",
+    "Indiana Fever": "IND",
+    "Las Vegas Aces": "LV",
+    "Los Angeles Sparks": "LA",
+    "Minnesota Lynx": "MIN",
+    "New York Liberty": "NY",
+    "Phoenix Mercury": "PHX",
+    "Portland Fire": "POR",
+    "Seattle Storm": "SEA",
+    "Toronto Tempo": "TOR",
+    "Washington Mystics": "WSH",
+}
+
+# The Odds API team-name → code map per sport key. Sports without a map (e.g.
+# NCAA, with hundreds of teams) fall back to passing the name through unchanged.
+TEAM_NAME_TO_CODE_BY_SPORT = {
+    "basketball_nba": TEAM_NAME_TO_CODE,
+    "basketball_wnba": WNBA_TEAM_NAME_TO_CODE,
+}
+
+
+def team_name_to_code(full_name: str, sport_key: str = "basketball_nba") -> str:
+    """Convert an Odds API full team name to its short code for the sport.
+
+    Falls back to the original name when the sport has no map or the name is
+    unrecognized (so downstream code still has a usable, if verbose, key).
+    """
+    mapping = TEAM_NAME_TO_CODE_BY_SPORT.get(sport_key, {})
+    return mapping.get(full_name, full_name)
 
 
 def format_date(date: datetime.date) -> str:
