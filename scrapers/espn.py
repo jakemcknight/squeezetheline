@@ -61,12 +61,25 @@ def _web_api(league: str) -> str:
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; squeezetheline/1.0)"}
 _TIMEOUT = 15
 
-# ESPN position abbreviations -> the 5-position scheme the analysis/defense code uses.
-# ESPN returns either generic (G/F/C) or specific (PG/SG/SF/PF) abbreviations.
+# ESPN basketball position abbreviations -> the 5-position scheme the analysis/
+# defense code uses. ESPN returns generic (G/F/C) or specific (PG/SG/SF/PF).
 POSITION_MAP = {
     "PG": "PG", "SG": "SG", "SF": "SF", "PF": "PF", "C": "C",
     "G": "PG", "F": "SF", "G-F": "SG", "F-G": "SF", "F-C": "PF", "C-F": "C",
 }
+
+# Baseball/football don't feed a defense-vs-position model, so their positions
+# are kept as ESPN's own abbreviations (display only). A blank/unknown position
+# falls back to a sport-appropriate default so data.prepare_stats (which drops
+# rows with a missing position) keeps every player who recorded stats.
+_DEFAULT_POSITION = {"basketball": "SF", "baseball": "DH", "football": "ATH"}
+
+
+def _map_position(sport: str, abbr: str) -> str:
+    """Normalize a roster position abbreviation for the given ESPN sport."""
+    if sport == "basketball":
+        return POSITION_MAP.get(abbr, "SF")
+    return abbr or _DEFAULT_POSITION.get(sport, "ATH")
 
 # Match injuries.py so statuses render consistently across sources.
 STATUS_SHORT = {
@@ -128,10 +141,14 @@ def get_injuries(league: str) -> pd.DataFrame:
 # --- Teams & rosters --------------------------------------------------------
 
 def get_teams(league: str) -> list[dict]:
-    """Return [{id, abbreviation, displayName}] for every team in the league."""
+    """Return [{id, abbreviation, displayName}] for every team in the league.
+
+    ESPN paginates the teams endpoint (default page size 50), which matters for
+    college football's ~130+ FBS teams, so we request a large page size.
+    """
     url = f"{_site_api(league)}/teams"
     try:
-        resp = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT)
+        resp = requests.get(url, headers=_HEADERS, params={"limit": 1000}, timeout=_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -156,36 +173,98 @@ def _athlete_url(league: str, athlete_id: str, slug: str) -> str:
     return f"https://www.espn.com/{web_league}/player/_/id/{athlete_id}"
 
 
-def get_player_positions(league: str, session: Optional[requests.Session] = None) -> pd.DataFrame:
-    """Walk every team roster and return player positions.
+def _iter_roster_athletes(athletes):
+    """Yield individual athlete dicts from an ESPN roster payload.
 
-    Returns a DataFrame: name, position (PG/SG/SF/PF/C), player_id, player_url.
-    Mirrors scrapers.nba.get_player_positions output so data.prepare_stats and
-    the player-detail headshot logic work unchanged.
+    Basketball rosters are a flat list of athletes; baseball/football rosters
+    are grouped by unit ("Pitchers"/"Infielders", or "offense"/"defense"), each
+    group carrying an "items" list. This flattens both shapes.
     """
-    sess = session or _session()
-    rows = []
-    for team in get_teams(league):
+    for entry in athletes or []:
+        if isinstance(entry, dict) and "items" in entry:
+            for a in entry.get("items", []) or []:
+                yield a
+        elif isinstance(entry, dict):
+            yield entry  # plain (flat-roster) athlete dict
+
+
+def _norm(s: str) -> str:
+    return unidecode(str(s or "")).lower().strip()
+
+
+def _slate_teams(league: str, team_codes, session: requests.Session) -> list[dict]:
+    """Resolve a set of slate team codes/names to ESPN team dicts.
+
+    Matches each requested code against an ESPN team's abbreviation first, then
+    its (normalized) displayName/name — so abbreviation-based sports (MLB/NFL)
+    and name-passthrough sports (NCAAF) both resolve. When team_codes is falsy,
+    returns every team (full-league walk, used by the small WNBA slate).
+    """
+    teams = get_teams(league)
+    if not team_codes:
+        return teams
+    wanted = {_norm(c) for c in team_codes if c}
+    out = []
+    for t in teams:
+        abbr = _norm(t.get("abbreviation"))
+        disp = _norm(t.get("displayName"))
+        # Exact abbreviation/name handles MLB/NFL; substring (either direction)
+        # bridges NCAAF naming gaps like "Ohio State" vs "Ohio State Buckeyes".
+        if (abbr in wanted or disp in wanted
+                or any(w and (w in disp or disp in w) for w in wanted)):
+            out.append(t)
+    return out
+
+
+def _roster_map(league: str, team_codes, session: requests.Session) -> dict:
+    """Walk the slate teams' rosters → {normalized name: athlete meta}.
+
+    Meta: {name, position, player_id, player_url, team-code}. One request per
+    slate team (cheap); game-log requests are issued separately, only for the
+    players that actually have prop lines.
+    """
+    sport = _sport_for(league)
+    out = {}
+    for team in _slate_teams(league, team_codes, session):
         url = f"{_site_api(league)}/teams/{team['id']}/roster"
         try:
-            resp = sess.get(url, timeout=_TIMEOUT)
+            resp = session.get(url, timeout=_TIMEOUT)
             resp.raise_for_status()
             athletes = resp.json().get("athletes", [])
         except Exception as e:
-            print(f"  espn roster failed for {team['abbreviation']}: {type(e).__name__}")
+            print(f"  espn roster failed for {team.get('abbreviation')}: {type(e).__name__}")
             continue
-        for a in athletes:
+        for a in _iter_roster_athletes(athletes):
             name = (a.get("displayName") or "").strip()
-            if not name:
+            aid = a.get("id")
+            if not name or not aid:
                 continue
-            pos = (a.get("position") or {})
-            abbr = pos.get("abbreviation") or ""
-            rows.append({
+            abbr = ((a.get("position") or {}).get("abbreviation")) or ""
+            out[_norm(name)] = {
                 "name": unidecode(name),
-                "position": POSITION_MAP.get(abbr, "SF"),
-                "player_id": a.get("id"),
-                "player_url": _athlete_url(league, a.get("id", ""), a.get("slug", "")),
-            })
+                "position": _map_position(sport, abbr),
+                "player_id": aid,
+                "player_url": _athlete_url(league, aid, a.get("slug", "")),
+                "team-code": team["abbreviation"],
+            }
+    return out
+
+
+def get_player_positions(league: str, team_codes=None,
+                         session: Optional[requests.Session] = None) -> pd.DataFrame:
+    """Player positions for the slate teams (or every team when team_codes is None).
+
+    Returns a DataFrame: name, position, player_id, player_url. Mirrors
+    scrapers.nba.get_player_positions so data.prepare_stats and the headshot
+    logic work unchanged across sports.
+    """
+    sess = session or _session()
+    rmap = _roster_map(league, team_codes, sess)
+    rows = [
+        {"name": m["name"], "position": m["position"],
+         "player_id": m["player_id"], "player_url": m["player_url"]}
+        for m in rmap.values()
+    ]
     return pd.DataFrame(rows, columns=["name", "position", "player_id", "player_url"])
 
 
@@ -202,7 +281,7 @@ def _stat_value(stats: list, names: list, key: str, made_only: bool = False) -> 
         raw = stats[idx]
     except (ValueError, IndexError):
         return 0.0
-    if raw in (None, "", "--"):
+    if raw in (None, "", "--", "-"):
         return 0.0
     if made_only and isinstance(raw, str) and "-" in raw:
         raw = raw.split("-")[0]
@@ -212,14 +291,120 @@ def _stat_value(stats: list, names: list, key: str, made_only: bool = False) -> 
         return 0.0
 
 
+def _innings_to_outs(stats: list, names: list) -> float:
+    """Convert a pitcher's innings-pitched (baseball '.1'/'.2' notation) to outs.
+
+    IP 6.2 == 6 innings + 2 outs == 20 outs. ESPN reports it as the string "6.2".
+    """
+    try:
+        idx = names.index("innings")
+        raw = str(stats[idx])
+    except (ValueError, IndexError):
+        return 0.0
+    if not raw or raw in ("--", "-"):
+        return 0.0
+    try:
+        whole, _, frac = raw.partition(".")
+        outs = int(whole) * 3
+        if frac:
+            outs += int(frac[0])
+        return float(outs)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _parse_basketball(stats: list, names: list) -> dict:
+    pts = _stat_value(stats, names, "points")
+    reb = _stat_value(stats, names, "totalRebounds")
+    ast = _stat_value(stats, names, "assists")
+    return {
+        "minutes": _stat_value(stats, names, "minutes"),
+        "points": pts, "rebounds": reb, "assists": ast,
+        "threes": _stat_value(
+            stats, names,
+            "threePointFieldGoalsMade-threePointFieldGoalsAttempted", made_only=True),
+        "steals": _stat_value(stats, names, "steals"),
+        "blocks": _stat_value(stats, names, "blocks"),
+        "pra": pts + reb + ast,
+    }
+
+
+def _parse_baseball(stats: list, names: list) -> dict:
+    is_pitcher = "innings" in names
+    hits = _stat_value(stats, names, "hits")
+    doubles = _stat_value(stats, names, "doubles")
+    triples = _stat_value(stats, names, "triples")
+    hr = _stat_value(stats, names, "homeRuns")
+    # Total bases = singles + 2·doubles + 3·triples + 4·HR
+    #            = hits + doubles + 2·triples + 3·HR
+    total_bases = hits + doubles + 2 * triples + 3 * hr
+    walks = _stat_value(stats, names, "walks")
+    at_bats = _stat_value(stats, names, "atBats")
+    outs = _innings_to_outs(stats, names)
+    return {
+        # Batting (0 for pitcher rows)
+        "hits": 0.0 if is_pitcher else hits,
+        "total_bases": 0.0 if is_pitcher else total_bases,
+        "home_runs": 0.0 if is_pitcher else hr,
+        "rbis": _stat_value(stats, names, "RBIs"),
+        "runs": _stat_value(stats, names, "runs"),
+        "stolen_bases": _stat_value(stats, names, "stolenBases"),
+        # Pitching (0 for batter rows)
+        "strikeouts_pitcher": _stat_value(stats, names, "strikeouts") if is_pitcher else 0.0,
+        "hits_allowed": hits if is_pitcher else 0.0,
+        "earned_runs": _stat_value(stats, names, "earnedRuns"),
+        "outs": outs,
+        # Participation proxy: outs recorded (pitchers) or plate appearances.
+        "minutes": outs if is_pitcher else (at_bats + walks),
+    }
+
+
+def _parse_football(stats: list, names: list) -> dict:
+    return {
+        "pass_yards": _stat_value(stats, names, "passingYards"),
+        "pass_tds": _stat_value(stats, names, "passingTouchdowns"),
+        "completions": _stat_value(stats, names, "completions"),
+        "pass_attempts": _stat_value(stats, names, "passingAttempts"),
+        "interceptions": _stat_value(stats, names, "interceptions"),
+        "rush_yards": _stat_value(stats, names, "rushingYards"),
+        "rush_attempts": _stat_value(stats, names, "rushingAttempts"),
+        "rush_tds": _stat_value(stats, names, "rushingTouchdowns"),
+        "receptions": _stat_value(stats, names, "receptions"),
+        "receiving_yards": _stat_value(stats, names, "receivingYards"),
+        "receiving_tds": _stat_value(stats, names, "receivingTouchdowns"),
+        # Football game logs carry no minutes; use 1.0 as a "played" flag so the
+        # DNP filter and per-game rate math stay well-defined.
+        "minutes": 1.0,
+    }
+
+
+_EVENT_PARSER = {
+    "basketball": _parse_basketball,
+    "baseball": _parse_baseball,
+    "football": _parse_football,
+}
+
+# Stat columns (besides the meta columns) each sport's parser emits — used to
+# numeric-coerce and to know what the analysis engine can average.
+_SPORT_STAT_COLUMNS = {
+    "basketball": ["minutes", "points", "rebounds", "assists", "threes", "steals", "blocks", "pra"],
+    "baseball": ["minutes", "hits", "total_bases", "home_runs", "rbis", "runs",
+                 "stolen_bases", "strikeouts_pitcher", "hits_allowed", "earned_runs", "outs"],
+    "football": ["minutes", "pass_yards", "pass_tds", "completions", "pass_attempts",
+                 "interceptions", "rush_yards", "rush_attempts", "rush_tds",
+                 "receptions", "receiving_yards", "receiving_tds"],
+}
+
+
 def get_player_gamelog(league: str, athlete_id: str, season: int,
                        session: Optional[requests.Session] = None) -> list[dict]:
-    """Fetch one athlete's game log for a season, parsed into stat rows.
+    """Fetch one athlete's game log for a season, parsed into sport stat rows.
 
-    Returns rows with: gameday, opponent, minutes, points, rebounds, assists,
-    threes, steals, blocks (player name/team are attached by the caller).
+    Each row has gameday, opponent, minutes, and the sport's stat columns
+    (see _SPORT_STAT_COLUMNS). Player name/team are attached by the caller.
     """
     sess = session or _session()
+    parse = _EVENT_PARSER.get(_sport_for(league), _parse_basketball)
     url = f"{_web_api(league)}/athletes/{athlete_id}/gamelog"
     try:
         resp = sess.get(url, params={"season": season}, timeout=_TIMEOUT)
@@ -228,7 +413,9 @@ def get_player_gamelog(league: str, athlete_id: str, season: int,
     except Exception:
         return []
 
-    names = data.get("names", [])
+    names = data.get("names", []) or []
+    if not names:
+        return []
     events_meta = data.get("events", {}) or {}
     out = []
     for season_type in data.get("seasonTypes", []) or []:
@@ -239,62 +426,57 @@ def get_player_gamelog(league: str, athlete_id: str, season: int,
                 if not eid or not stats:
                     continue
                 meta = events_meta.get(eid, {})
-                opp = (meta.get("opponent") or {}).get("abbreviation", "")
-                gd = meta.get("gameDate", "")
-                out.append({
-                    "gameday": gd,
-                    "opponent": opp,
-                    "minutes": _stat_value(stats, names, "minutes"),
-                    "points": _stat_value(stats, names, "points"),
-                    "rebounds": _stat_value(stats, names, "totalRebounds"),
-                    "assists": _stat_value(stats, names, "assists"),
-                    "threes": _stat_value(
-                        stats, names,
-                        "threePointFieldGoalsMade-threePointFieldGoalsAttempted",
-                        made_only=True,
-                    ),
-                    "steals": _stat_value(stats, names, "steals"),
-                    "blocks": _stat_value(stats, names, "blocks"),
-                })
+                row = {
+                    "gameday": meta.get("gameDate", ""),
+                    "opponent": (meta.get("opponent") or {}).get("abbreviation", ""),
+                }
+                row.update(parse(stats, names))
+                out.append(row)
     return out
 
 
-def get_season_stats(league: str, season: Optional[int] = None) -> pd.DataFrame:
-    """Build a full per-game stat table for the league/season via ESPN.
+def _finalize_stats(rows: list, sport: str) -> pd.DataFrame:
+    """Coerce a list of game-row dicts into the canonical stats DataFrame."""
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["gameday"] = pd.to_datetime(df["gameday"], errors="coerce", utc=True).dt.tz_localize(None)
+    df = df[df["gameday"].notna()]
+    for col in _SPORT_STAT_COLUMNS.get(sport, []):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    return df
 
-    Returns the same columns scrapers.nba.get_current_season_stats produces:
-    name, team-code, opponent, gameday, minutes, points, rebounds, assists,
-    threes, steals, blocks, pra.
 
-    See module docstring re: request cost (one call per player).
+def get_slate_stats(league: str, team_codes=None, player_names=None,
+                    season: Optional[int] = None) -> pd.DataFrame:
+    """Per-game stats for the players on a slate, via ESPN.
+
+    Walks only the slate teams' rosters, then fetches game logs only for players
+    in `player_names` (the slate's prop players) — keeping the request count
+    proportional to the slate, not the whole league. Pass team_codes=None to
+    walk every team (small leagues like WNBA).
+
+    Columns: name, team-code, opponent, gameday + the sport's stat columns.
     """
     if season is None:
         season = datetime.date.today().year
     sess = _session()
+    sport = _sport_for(league)
+    rmap = _roster_map(league, team_codes, sess)
 
+    wanted = {_norm(n) for n in player_names} if player_names else None
     rows = []
-    for team in get_teams(league):
-        roster_url = f"{_site_api(league)}/teams/{team['id']}/roster"
-        try:
-            athletes = sess.get(roster_url, timeout=_TIMEOUT).json().get("athletes", [])
-        except Exception:
+    for key, meta in rmap.items():
+        if wanted is not None and key not in wanted:
             continue
-        team_code = team["abbreviation"]
-        for a in athletes:
-            aid = a.get("id")
-            name = (a.get("displayName") or "").strip()
-            if not aid or not name:
-                continue
-            for g in get_player_gamelog(league, aid, season, session=sess):
-                rows.append({"name": unidecode(name), "team-code": team_code, **g})
+        for g in get_player_gamelog(league, meta["player_id"], season, session=sess):
+            rows.append({"name": meta["name"], "team-code": meta["team-code"], **g})
+    return _finalize_stats(rows, sport)
 
-    if not rows:
-        return pd.DataFrame()
 
-    df = pd.DataFrame(rows)
-    df["gameday"] = pd.to_datetime(df["gameday"], errors="coerce", utc=True).dt.tz_localize(None)
-    df = df[df["gameday"].notna()]
-    for col in ("minutes", "points", "rebounds", "assists", "threes", "steals", "blocks"):
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-    df["pra"] = df["points"] + df["rebounds"] + df["assists"]
-    return df
+def get_season_stats(league: str, season: Optional[int] = None) -> pd.DataFrame:
+    """Full-league per-game stats via ESPN (every roster). Used by small slates
+    (WNBA). For larger leagues prefer get_slate_stats to bound request cost.
+    """
+    return get_slate_stats(league, team_codes=None, player_names=None, season=season)

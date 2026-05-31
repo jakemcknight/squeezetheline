@@ -1,47 +1,46 @@
 """
-MLB player stats & positions — NOT WIRED (projections stubbed).
+MLB player stats & positions, sourced from ESPN.
 
-Odds (scrapers/odds_api.py with sport_key="baseball_mlb") and injuries
-(scrapers/espn.py / ESPN league "mlb") work today, so MLB is selectable and
-shows player-prop lines + injury context. What's missing is *projections*.
+Projections are live: ESPN's free baseball game-log endpoints back both batters
+(hits, total bases, HR, RBI, runs, SB) and pitchers (strikeouts, hits allowed,
+earned runs, outs). Batter and pitcher rows share one stats table; each row
+carries only its side's columns (the other side's are 0), which the analysis
+engine grades independently per prop type. See config.SPORT_STAT_CONFIGS[
+"baseball_mlb"] for the stat→prop-line mapping.
 
-Why it's stubbed rather than implemented:
-  The projection engine (analysis.py / data.py) and the entire Picks Board UI
-  are built around basketball box-score columns: points, rebounds, assists,
-  threes, steals, blocks, pra. Baseball has an entirely different stat shape
-  (hits, total bases, HR, RBIs, ERA, strikeouts; batters vs pitchers), so there
-  is no meaningful way to feed MLB data through the basketball pipeline. Real
-  MLB projections need a parallel analysis path, not just a stats scraper.
-
-What a stats source WOULD need (then flip SPORTS["MLB"]["projections"]=True and
-set stats_source accordingly in config.py, AND add a baseball-aware analysis
-path):
-  1. A per-game batter/pitcher game-log feed (ESPN baseball gamelog endpoints
-     exist: site.web.api.espn.com/.../baseball/mlb/athletes/{id}/gamelog).
-  2. Baseball-appropriate projection columns + line types (BA, HR, RBI, TB,
-     SB for batters; K, ERA, outs, hits-allowed for pitchers).
-  3. A board/analysis variant that ranks edges on those columns.
+These wrappers expose the same interface as scrapers/nba.py so the dispatcher in
+scrapers/sources.py can treat them interchangeably. They're slate-scoped: only
+the teams playing on the selected date (and only their prop players) are walked,
+keeping the request count proportional to the slate rather than all 30 rosters.
 """
+
+import datetime
 
 import pandas as pd
 
-# Same column contract as the basketball stats sources, so the dispatcher in
-# scrapers/sources.py can treat a (future) MLB source interchangeably.
-_STATS_COLUMNS = [
-    "name", "team-code", "opponent", "gameday", "minutes",
-    "points", "rebounds", "assists", "threes", "steals", "blocks", "pra",
-]
-_POSITION_COLUMNS = ["name", "position", "player_id", "player_url"]
+from scrapers import espn
+
+LEAGUE = "mlb"
 
 
-def get_current_season_stats() -> pd.DataFrame:
-    """STUB: no MLB player season-stats source wired yet. Returns empty.
+def get_current_season_stats(team_codes=None, player_names=None) -> pd.DataFrame:
+    """Per-game batter/pitcher stats for the slate's players (ESPN).
 
-    See the module docstring for what enabling projections would require.
+    Columns: name, team-code, opponent, gameday, minutes + the MLB stat columns
+    (hits, total_bases, home_runs, rbis, runs, stolen_bases, strikeouts_pitcher,
+    hits_allowed, earned_runs, outs). The MLB season is a single calendar year,
+    so the current year is the ESPN season id.
     """
-    return pd.DataFrame(columns=_STATS_COLUMNS)
+    return espn.get_slate_stats(
+        LEAGUE, team_codes=team_codes, player_names=player_names,
+        season=datetime.date.today().year,
+    )
 
 
-def get_player_positions() -> pd.DataFrame:
-    """STUB: no MLB player-positions source wired yet. Returns empty."""
-    return pd.DataFrame(columns=_POSITION_COLUMNS)
+def get_player_positions(team_codes=None) -> pd.DataFrame:
+    """MLB player positions for the slate teams (ESPN rosters).
+
+    Columns: name, position (ESPN abbreviation: SP/RP/C/1B/.../DH), player_id,
+    player_url.
+    """
+    return espn.get_player_positions(LEAGUE, team_codes=team_codes)

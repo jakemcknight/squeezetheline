@@ -14,7 +14,10 @@ from scrapers.sources import (
     get_defense_by_position,
     get_injury_report,
 )
-from config import SPORTS, DEFAULT_SPORT, active_sports, sport_config
+from config import (
+    SPORTS, DEFAULT_SPORT, active_sports, sport_config,
+    stat_configs_for, stat_labels_for,
+)
 from picks import (
     add_pick,
     remove_pick,
@@ -537,6 +540,10 @@ if not render_auth_gate():
 # on login, so logins are instant. The admin panel on Auto Picks still has
 # manual trigger buttons if you ever need to force a run.
 
+# Stat configs are now sport-aware — the projection pipeline reads
+# config.stat_configs_for(sport_key) (which returns (stat_key, prop_type, label)
+# per sport). This NBA-only list is kept for backward compatibility with any
+# code/tooling that still imports it; live code paths use stat_configs_for().
 STAT_CONFIGS = [
     ("points", "Total Points"),
     ("rebounds", "Total Rebounds"),
@@ -622,14 +629,24 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False,
     """
     events = get_events_for_date(date, sport_key)
     todays_games = get_todays_games(date, sport_key)
-    stats = get_season_stats(sport_key)
-    positions = get_positions(sport_key)
+    # Fetch the prop lines first so the stats fetch can be scoped to just the
+    # players/teams on the slate. ESPN-backed sports (MLB/NFL/NCAAF) walk only
+    # the slate teams' rosters and pull game logs only for prop players, keeping
+    # the request count proportional to the slate; the NBA source ignores the
+    # scoping (its single LeagueGameLog call already covers the whole league).
+    raw_props = get_all_props(date, all_books=all_books, sport_key=sport_key)
+    slate_teams = list(todays_games.keys())
+    prop_players = (
+        sorted(raw_props["player"].dropna().unique().tolist())
+        if not raw_props.empty and "player" in raw_props.columns else []
+    )
+    stats = get_season_stats(sport_key, team_codes=slate_teams, player_names=prop_players)
+    positions = get_positions(sport_key, team_codes=slate_teams)
     # prepare_stats is safe on an empty frame (it returns an empty frame with
     # the expected columns), but a sport with no stats source has nothing to
     # analyze, so we skip the projection pipeline below for it.
     df = prepare_stats(stats, positions)
     has_stats = not df.empty
-    raw_props = get_all_props(date, all_books=all_books, sport_key=sport_key)
     # For the main analysis, dedupe to one line per player/stat (best/median).
     # Save the raw multi-book table separately for the detail view.
     if all_books and "book" in raw_props.columns:
@@ -712,7 +729,7 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False,
         # Return empty per-stat frames so the projection board stays empty, and
         # stash the raw lines + injuries under a sentinel summary key so the UI
         # can render a sport-appropriate odds + injuries view instead.
-        for stat, _ in STAT_CONFIGS:
+        for stat, _, _ in stat_configs_for(sport_key):
             results[stat] = pd.DataFrame()
         odds_records = (
             analysis_props[["type", "player", "spread"]]
@@ -726,8 +743,9 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False,
         odds_only = {"__odds_only__": {"props": odds_records, "injuries": inj_records}}
         return events, results, odds_only
 
-    for stat, prop_type in STAT_CONFIGS:
-        result = analyze_stat(stat, prop_type, df, props, todays_games, defense, game_date=date)
+    for stat, prop_type, _label in stat_configs_for(sport_key):
+        result = analyze_stat(stat, prop_type, df, props, todays_games, defense,
+                              game_date=date, sport_key=sport_key)
         result = result.merge(player_urls, on="name", how="left")
         if not injury_join.empty:
             result = result.merge(injury_join, on="name", how="left")
@@ -764,7 +782,8 @@ def fetch_fresh_data(date: datetime.date, all_books: bool = False,
 
     # Build per-player summaries for the detail view
     all_players = sorted(set(props["name"].dropna().unique()))
-    summaries = build_player_summaries(all_players, df, props, todays_games=todays_games)
+    summaries = build_player_summaries(all_players, df, props, todays_games=todays_games,
+                                       sport_key=sport_key)
 
     # Attach the NBA player_id (used to build the headshot URL)
     for name, summary in summaries.items():
@@ -1027,12 +1046,101 @@ def make_last_n_chart(last_games: list[dict], stat_key: str, stat_label: str, li
     return alt.layer(*layers).properties(height=220, title=title)
 
 
+def _is_basketball(sport_key: str) -> bool:
+    return str(sport_key).startswith("basketball")
+
+
+def _fmt_stat_delta(val, line):
+    """Format a per-game stat cell as 'value  ↑/↓ delta vs line'."""
+    if pd.isna(val):
+        return ""
+    base = f"{val:.0f}"
+    if line is None:
+        return base
+    d = val - line
+    if d > 0:
+        return f"{base}  ↑ {d:.1f}"
+    if d < 0:
+        return f"{base}  ↓ {abs(d):.1f}"
+    return base
+
+
+def _render_avg_table(window_rows, stat_defs, show_volume):
+    """Render an averages table (one row per window) over the sport's stats.
+
+    window_rows: list of (window_label, avg_dict_or_None).
+    stat_defs:   list of (stat_key, prop_type, label) from config.
+    """
+    cfg = {}
+    if show_volume:
+        cfg["MIN"] = st.column_config.NumberColumn(format="%.1f")
+    data = []
+    for label, src in window_rows:
+        if not src:
+            continue
+        row = {"Window": label}
+        if show_volume:
+            row["MIN"] = round(float(src.get("minutes", 0) or 0), 1)
+        for key, _pt, slabel in stat_defs:
+            row[slabel] = round(float(src.get(key, 0) or 0), 1)
+            cfg[slabel] = st.column_config.NumberColumn(format="%.1f")
+        data.append(row)
+    if not data:
+        return
+    _, mid, _ = st.columns([1, 6, 1])
+    with mid:
+        st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, column_config=cfg)
+
+
+def _render_gamelog_table(games, stat_defs, lines, show_volume):
+    """Render a game-by-game table (Date/Opp + sport stats), colored vs lines."""
+    df = pd.DataFrame(games).rename(columns={"date": "Date", "opponent": "Opp", "min": "MIN"})
+    present = [(key, slabel) for key, _pt, slabel in stat_defs if key in df.columns]
+    df = df.rename(columns={key: slabel for key, slabel in present})
+    display_cols = ["Date", "Opp"] + (["MIN"] if show_volume else []) + [slabel for _, slabel in present]
+    df = df[[c for c in display_cols if c in df.columns]]
+
+    line_by_label = {slabel: lines.get(key) for key, slabel in present}
+    fmt = {}
+    if show_volume and "MIN" in df.columns:
+        fmt["MIN"] = "{:.0f}"
+    for slabel in line_by_label:
+        fmt[slabel] = (lambda lbl: (lambda v: _fmt_stat_delta(v, line_by_label[lbl])))(slabel)
+
+    def _color(row):
+        styles = ["" for _ in row]
+        for slabel, ln in line_by_label.items():
+            if slabel not in row.index or ln is None:
+                continue
+            val = row[slabel]
+            if pd.isna(val):
+                continue
+            idx = row.index.get_loc(slabel)
+            d = val - ln
+            if d > 0:
+                styles[idx] = "color: #22c55e; font-weight: 600;"
+            elif d < 0:
+                styles[idx] = "color: #ef4444; font-weight: 600;"
+        return styles
+
+    styled = df.style.format(fmt).apply(_color, axis=1)
+    _, mid, _ = st.columns([1, 6, 1])
+    with mid:
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
 def render_player_detail(name: str, summaries: dict, results: dict):
     """Render a detailed view for a single player."""
     summary = summaries.get(name)
     if summary is None:
         st.warning(f"No summary data for {name}.")
         return
+
+    # Sport-aware stat set for this player's tables (config-driven).
+    from config import stat_configs_for
+    _sport_key = st.session_state.get("sport_key", "basketball_nba")
+    _stat_defs = stat_configs_for(_sport_key)          # [(stat_key, prop_type, label)]
+    _show_volume = _is_basketball(_sport_key)           # MIN column only makes sense for hoops
 
     if st.button("Back to picks", type="secondary"):
         st.session_state.pop("selected_player", None)
@@ -1244,17 +1352,20 @@ def render_player_detail(name: str, summaries: dict, results: dict):
     season_avg = summary.get("season_avg", {})
     career_avg = summary.get("career_avg", {})
 
+    # For the averages / game-log tables, show only the stats relevant to this
+    # player — the ones they have a line for, or a non-zero season average. This
+    # keeps e.g. an MLB batter's page from showing empty pitcher columns (and a
+    # pitcher's page from showing empty batting columns). Falls back to all stats
+    # when nothing qualifies (so the tables are never empty).
+    _table_defs = [
+        d for d in _stat_defs
+        if (d[0] in lines) or (float(season_avg.get(d[0], 0) or 0) > 0)
+    ] or _stat_defs
+
     # Only show stats the player has a line for (so the layout stays clean
-    # when a player doesn't have an obscure prop like blocks or 3PM).
-    STAT_DISPLAY = [
-        ("points", "Points", "pts"),
-        ("rebounds", "Rebounds", "reb"),
-        ("assists", "Assists", "ast"),
-        ("pra", "PRA", "pra"),
-        ("threes", "3PM", "threes"),
-        ("steals", "Steals", "steals"),
-        ("blocks", "Blocks", "blocks"),
-    ]
+    # when a player doesn't have an obscure prop). Driven by the sport's config:
+    # (stat_key, label, game_row_key) — the game-row key equals the stat key.
+    STAT_DISPLAY = [(key, label, key) for key, _pt, label in _stat_defs]
     active_stats = [s for s in STAT_DISPLAY if lines.get(s[0]) is not None]
     if not active_stats:
         active_stats = STAT_DISPLAY[:3]  # default to PTS/REB/AST if no lines
@@ -1661,49 +1772,20 @@ def render_player_detail(name: str, summaries: dict, results: dict):
                     st.altair_chart(chart, use_container_width=True)
 
     # --- Averages summary (season, career, home, away) ---
+    # "Career" is the committed historical dataset for the NBA; for other sports
+    # it's the current-season game logs (labeled accordingly) — see
+    # analysis.build_player_summaries.
     st.subheader("Averages")
     home_avg = summary.get("home_avg")
     away_avg = summary.get("away_avg")
-
-    def _avg_row(label: str, src: dict | None):
-        if not src:
-            return None
-        return {
-            "Window": label,
-            "MIN": src.get("minutes", 0),
-            "PTS": src.get("points", 0),
-            "REB": src.get("rebounds", 0),
-            "AST": src.get("assists", 0),
-            "PRA": src.get("pra", 0),
-            "3PM": src.get("threes", 0),
-            "STL": src.get("steals", 0),
-            "BLK": src.get("blocks", 0),
-        }
-
-    avg_rows = [
-        _avg_row(f"This Season ({season_avg.get('games', 0)} games)", season_avg),
-        _avg_row(f"Career ({career_avg.get('games', 0)} games)", career_avg),
-        _avg_row(f"Home ({home_avg['games'] if home_avg else 0} games)", home_avg),
-        _avg_row(f"Away ({away_avg['games'] if away_avg else 0} games)", away_avg),
+    _career_label = "Career" if summary.get("has_career") else "Recent"
+    window_rows = [
+        (f"This Season ({season_avg.get('games', 0)} games)", season_avg),
+        (f"{_career_label} ({career_avg.get('games', 0)} games)", career_avg),
+        (f"Home ({home_avg['games'] if home_avg else 0} games)", home_avg),
+        (f"Away ({away_avg['games'] if away_avg else 0} games)", away_avg),
     ]
-    avg_df = pd.DataFrame([r for r in avg_rows if r is not None])
-    _, avg_mid, _ = st.columns([1, 6, 1])
-    with avg_mid:
-        st.dataframe(
-            avg_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "MIN": st.column_config.NumberColumn(format="%.1f"),
-                "PTS": st.column_config.NumberColumn(format="%.1f"),
-                "REB": st.column_config.NumberColumn(format="%.1f"),
-                "AST": st.column_config.NumberColumn(format="%.1f"),
-                "PRA": st.column_config.NumberColumn(format="%.1f"),
-                "3PM": st.column_config.NumberColumn(format="%.1f"),
-                "STL": st.column_config.NumberColumn(format="%.1f"),
-                "BLK": st.column_config.NumberColumn(format="%.1f"),
-            },
-        )
+    _render_avg_table(window_rows, _table_defs, _show_volume)
 
     # --- Last 20 games ---
     st.subheader("Last 20 Games")
@@ -1711,69 +1793,11 @@ def render_player_detail(name: str, summaries: dict, results: dict):
     if not last_20:
         st.info("No game history available for this player.")
     else:
-        games_df = pd.DataFrame(last_20)
-        games_df = games_df.rename(columns={
-            "date": "Date", "opponent": "Opp", "min": "MIN",
-            "pts": "PTS", "reb": "REB", "ast": "AST",
-        })
-
-        # Format each stat cell as "value  ↑/↓ delta"
-        def format_stat(val, line):
-            if pd.isna(val):
-                return ""
-            base = f"{val:.0f}"
-            if line is None:
-                return base
-            d = val - line
-            if d > 0:
-                return f"{base}  ↑ {d:.1f}"
-            if d < 0:
-                return f"{base}  ↓ {abs(d):.1f}"
-            return base
-
-        # Color each stat cell based on whether it beat the line
-        def color_stat(row):
-            styles = ["" for _ in row]
-            for stat_col, line_key in [("PTS", "points"), ("REB", "rebounds"), ("AST", "assists")]:
-                if stat_col not in row.index:
-                    continue
-                val = row[stat_col]
-                line = lines.get(line_key)
-                if line is None or pd.isna(val):
-                    continue
-                idx = row.index.get_loc(stat_col)
-                d = val - line
-                if d > 0:
-                    styles[idx] = "color: #22c55e; font-weight: 600;"
-                elif d < 0:
-                    styles[idx] = "color: #ef4444; font-weight: 600;"
-            return styles
-
-        styled = (
-            games_df.style
-            .format({
-                "MIN": "{:.0f}",
-                "PTS": lambda v: format_stat(v, lines.get("points")),
-                "REB": lambda v: format_stat(v, lines.get("rebounds")),
-                "AST": lambda v: format_stat(v, lines.get("assists")),
-            })
-            .apply(color_stat, axis=1)
-        )
-        _, games_mid, _ = st.columns([1, 6, 1])
-        with games_mid:
-            st.dataframe(styled, use_container_width=True, hide_index=True)
+        _render_gamelog_table(last_20, _table_defs, lines, _show_volume)
 
         # Hit rate over last 20 vs current line
         st.subheader("Hit Rate vs Today's Lines (Last 20)")
-        hit_stats = [
-            ("Points", "points", "pts"),
-            ("Rebounds", "rebounds", "reb"),
-            ("Assists", "assists", "ast"),
-            ("PRA", "pra", "pra"),
-            ("3PM", "threes", "threes"),
-            ("Steals", "steals", "steals"),
-            ("Blocks", "blocks", "blocks"),
-        ]
+        hit_stats = [(label, key, key) for key, _pt, label in _stat_defs]
         active = [s for s in hit_stats if lines.get(s[1]) is not None]
         if active:
             n_cols = min(len(active), 4)
@@ -1790,84 +1814,14 @@ def render_player_detail(name: str, summaries: dict, results: dict):
     vs_opp_avg = summary.get("vs_opponent_avg")
     if vs_opp:
         opp_code = vs_opp_avg.get("opponent") if vs_opp_avg else "opponent"
-        st.subheader(f"Career vs {opp_code} ({len(vs_opp)} most recent · {vs_opp_avg['games'] if vs_opp_avg else 0} total)")
-
-        # Summary averages row
-        if vs_opp_avg:
-            avg_row = pd.DataFrame([{
-                "Window": f"Career vs {opp_code}",
-                "MIN": vs_opp_avg.get("minutes", 0),
-                "PTS": vs_opp_avg.get("points", 0),
-                "REB": vs_opp_avg.get("rebounds", 0),
-                "AST": vs_opp_avg.get("assists", 0),
-                "PRA": vs_opp_avg.get("pra", 0),
-                "3PM": vs_opp_avg.get("threes", 0),
-                "STL": vs_opp_avg.get("steals", 0),
-                "BLK": vs_opp_avg.get("blocks", 0),
-            }])
-            _, opp_avg_mid, _ = st.columns([1, 6, 1])
-            with opp_avg_mid:
-                st.dataframe(avg_row, use_container_width=True, hide_index=True, column_config={
-                    "MIN": st.column_config.NumberColumn(format="%.1f"),
-                    "PTS": st.column_config.NumberColumn(format="%.1f"),
-                    "REB": st.column_config.NumberColumn(format="%.1f"),
-                    "AST": st.column_config.NumberColumn(format="%.1f"),
-                    "PRA": st.column_config.NumberColumn(format="%.1f"),
-                    "3PM": st.column_config.NumberColumn(format="%.1f"),
-                    "STL": st.column_config.NumberColumn(format="%.1f"),
-                    "BLK": st.column_config.NumberColumn(format="%.1f"),
-                })
-
-        # Recent matchups table with the same coloring treatment as Last 20
-        opp_df = pd.DataFrame(vs_opp)
-        opp_df = opp_df.rename(columns={
-            "date": "Date", "opponent": "Opp", "min": "MIN",
-            "pts": "PTS", "reb": "REB", "ast": "AST",
-        })
-
-        def format_stat_opp(val, line):
-            if pd.isna(val):
-                return ""
-            base = f"{val:.0f}"
-            if line is None:
-                return base
-            d = val - line
-            if d > 0:
-                return f"{base}  ↑ {d:.1f}"
-            if d < 0:
-                return f"{base}  ↓ {abs(d):.1f}"
-            return base
-
-        def color_opp(row):
-            styles = ["" for _ in row]
-            for stat_col, line_key in [("PTS", "points"), ("REB", "rebounds"), ("AST", "assists")]:
-                if stat_col not in row.index:
-                    continue
-                val = row[stat_col]
-                line = lines.get(line_key)
-                if line is None or pd.isna(val):
-                    continue
-                idx = row.index.get_loc(stat_col)
-                d = val - line
-                if d > 0:
-                    styles[idx] = "color: #22c55e; font-weight: 600;"
-                elif d < 0:
-                    styles[idx] = "color: #ef4444; font-weight: 600;"
-            return styles
-
-        styled_opp = (
-            opp_df.style
-            .format({
-                "MIN": "{:.0f}",
-                "PTS": lambda v: format_stat_opp(v, lines.get("points")),
-                "REB": lambda v: format_stat_opp(v, lines.get("rebounds")),
-                "AST": lambda v: format_stat_opp(v, lines.get("assists")),
-            })
-            .apply(color_opp, axis=1)
+        _vs_label = "Career" if summary.get("has_career") else "This season"
+        st.subheader(
+            f"{_vs_label} vs {opp_code} "
+            f"({len(vs_opp)} most recent · {vs_opp_avg['games'] if vs_opp_avg else 0} total)"
         )
-        _, opp_mid, _ = st.columns([1, 6, 1])
-        with opp_mid:
-            st.dataframe(styled_opp, use_container_width=True, hide_index=True)
+        if vs_opp_avg:
+            _render_avg_table([(f"vs {opp_code}", vs_opp_avg)], _table_defs, _show_volume)
+        _render_gamelog_table(vs_opp, _table_defs, lines, _show_volume)
 
 
 # --- Header ---
@@ -1881,7 +1835,7 @@ with header_col:
             """
             <div style="padding-top: 38px;">
                 <p style="margin: 0; color: #8b92a5; font-size: 1rem; letter-spacing: 0.02em;">
-                    NBA player props · data-driven picks
+                    Player props · data-driven picks
                 </p>
             </div>
             """,
@@ -1911,9 +1865,9 @@ with st.sidebar:
         "Sport",
         options=_sport_names,
         index=_default_sport_idx,
-        help="NBA and WNBA have full projections. NCAA basketball, MLB, NFL and "
-             "NCAA football show odds + injuries only — the projection engine is "
-             "basketball-specific, so those sports have no projection edges yet.",
+        help="NBA, WNBA, MLB, NFL and NCAA football have full projections "
+             "(recent form, hit rates, confidence). NCAA basketball shows odds + "
+             "injuries only — no player-stats source is wired for it yet.",
     )
     _sport_cfg = sport_config(selected_sport)
     sport_key = _sport_cfg["key"]
@@ -2490,33 +2444,47 @@ if nav_choice == "Compare":
         st.info("Pick at least 2 players to compare.")
         st.stop()
 
-    # Build a comparison DataFrame
+    # Build a comparison DataFrame — metric rows are sport-aware (the sport's
+    # stat set, with averages from build_player_summaries).
+    _cmp_defs = stat_configs_for(sport_key)
+    _cmp_basketball = _is_basketball(sport_key)
+    _career_label = "Career" if _cmp_basketball else "Recent"
+
+    def _avg_getter(section: str, key: str):
+        return lambda s, _r: round(float(s.get(section, {}).get(key, 0) or 0), 1)
+
     METRIC_ROWS = [
         ("Team", lambda s, _r: s.get("team", "")),
         ("Position", lambda s, _r: s.get("position", "")),
         ("Tonight's Opp", lambda _s, r: (r.iloc[0].get("opponent", "") if r is not None and not r.empty else "")),
         ("Inj status", lambda s, _r: (s.get("injury") or {}).get("status_short") or "-"),
         ("Season games", lambda s, _r: s.get("season_avg", {}).get("games", 0)),
-        ("Season PTS", lambda s, _r: round(s.get("season_avg", {}).get("points", 0), 1)),
-        ("Season REB", lambda s, _r: round(s.get("season_avg", {}).get("rebounds", 0), 1)),
-        ("Season AST", lambda s, _r: round(s.get("season_avg", {}).get("assists", 0), 1)),
-        ("Season MIN", lambda s, _r: round(s.get("season_avg", {}).get("minutes", 0), 1)),
-        ("Career PTS", lambda s, _r: round(s.get("career_avg", {}).get("points", 0), 1)),
-        ("Career REB", lambda s, _r: round(s.get("career_avg", {}).get("rebounds", 0), 1)),
-        ("Career AST", lambda s, _r: round(s.get("career_avg", {}).get("assists", 0), 1)),
-        ("Home PTS", lambda s, _r: round((s.get("home_avg") or {}).get("points", 0), 1) if s.get("home_avg") else "-"),
-        ("Away PTS", lambda s, _r: round((s.get("away_avg") or {}).get("points", 0), 1) if s.get("away_avg") else "-"),
     ]
+    if _cmp_basketball:
+        METRIC_ROWS.append(("Season MIN", _avg_getter("season_avg", "minutes")))
+    for _key, _pt, _label in _cmp_defs:
+        METRIC_ROWS.append((f"Season {_label}", _avg_getter("season_avg", _key)))
+    for _key, _pt, _label in _cmp_defs:
+        METRIC_ROWS.append((f"{_career_label} {_label}", _avg_getter("career_avg", _key)))
+    # Home/away splits exist for the NBA only (career dataset); show them for the
+    # leading stat so the table stays compact.
+    if _cmp_basketball and _cmp_defs:
+        _lead = _cmp_defs[0][0]
+        METRIC_ROWS.append((f"Home {_cmp_defs[0][2]}",
+                            lambda s, _r, k=_lead: round((s.get("home_avg") or {}).get(k, 0), 1) if s.get("home_avg") else "-"))
+        METRIC_ROWS.append((f"Away {_cmp_defs[0][2]}",
+                            lambda s, _r, k=_lead: round((s.get("away_avg") or {}).get(k, 0), 1) if s.get("away_avg") else "-"))
 
     # For each selected player, build a column
     compare_data = {"Metric": [row[0] for row in METRIC_ROWS]}
+    _opp_stat = _cmp_defs[0][0] if _cmp_defs else None
     for player in selected:
         summary = summaries.get(player, {})
-        # Find this player's PTS result row for tonight (just for opponent)
-        result_pts = results.get("points")
+        # Find any result row for tonight (just to read the opponent)
+        result_lead = results.get(_opp_stat)
         player_row = None
-        if result_pts is not None and not result_pts.empty:
-            match = result_pts[result_pts["name"] == player]
+        if result_lead is not None and not result_lead.empty:
+            match = result_lead[result_lead["name"] == player]
             if not match.empty:
                 player_row = match
         compare_data[player] = [getter(summary, player_row) for _, getter in METRIC_ROWS]
@@ -2527,10 +2495,7 @@ if nav_choice == "Compare":
     # --- Tonight's lines side-by-side ---
     st.subheader("Tonight's lines")
     line_rows = []
-    STAT_DISPLAY_CMP = [
-        ("points", "PTS"), ("rebounds", "REB"), ("assists", "AST"),
-        ("pra", "PRA"), ("threes", "3PM"), ("steals", "STL"), ("blocks", "BLK"),
-    ]
+    STAT_DISPLAY_CMP = [(key, label) for key, _pt, label in _cmp_defs]
     for stat_key, label in STAT_DISPLAY_CMP:
         line_data = {"Stat": label}
         any_line = False
@@ -3391,15 +3356,9 @@ with st.container():
 st.divider()
 
 # --- Stat selector ---
-STAT_LABELS = {
-    "Points": "points",
-    "Rebounds": "rebounds",
-    "Assists": "assists",
-    "PRA": "pra",
-    "3PM": "threes",
-    "Steals": "steals",
-    "Blocks": "blocks",
-}
+# Stat selector pills are sport-aware: {display label: stat_key} for the
+# selected sport (config.SPORT_STAT_CONFIGS).
+STAT_LABELS = stat_labels_for(sport_key)
 stat_col, view_col = st.columns([4, 1])
 with stat_col:
     # st.pills is a newer, more compact selector. Falls back to radio on older

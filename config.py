@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import datetime
 
@@ -32,9 +34,10 @@ DATA_DIR = "data"
 #   markets       — Odds API player-prop markets to request
 #
 # stat_categories — human-readable list of the headline stats for the sport,
-#                   shown in the UI. Drives nothing in the projection math
-#                   (which is basketball-specific); it's display metadata so
-#                   each sport reads correctly in the odds/markets view.
+#                   shown in the UI. The actual projection math is driven by
+#                   SPORT_STAT_CONFIGS below (one entry per Odds-API prop
+#                   market), which maps each prop line to the stat column the
+#                   analysis engine averages and grades against.
 #
 # Coverage today:
 #   NBA   — fully wired (nba_api stats, HashtagBasketball defense, ML models).
@@ -43,15 +46,19 @@ DATA_DIR = "data"
 #           no ML models (no historical dataset) — analysis degrades gracefully.
 #   NCAAB — odds + ESPN injuries wired. No player season-stats source yet
 #           (~360 D1 teams; see scrapers/ncaa.py), so projections are off.
-#   MLB / NFL / NCAA Football — odds (sport-appropriate prop markets) + ESPN
-#           injuries + sport-aware logos/headshots. projections=False: the
-#           projection engine (analysis.py / data.py) and the Picks Board UI are
-#           built entirely around basketball box-score columns
-#           (points/rebounds/assists/threes/steals/blocks/pra), so there's no
-#           meaningful way to project baseball/football lines through it without
-#           a parallel stats pipeline. These sports are selectable and show
-#           lines + injuries; the projection board is intentionally stubbed.
-#           See scrapers/{mlb,nfl,ncaaf}.py for what a stats source would need.
+#   MLB   — full projections via ESPN baseball game logs. Batters (hits, total
+#           bases, HR, RBI, runs, SB) and pitchers (Ks, hits allowed, earned
+#           runs, outs) share one stat table; each row carries only its side's
+#           columns. No defense-vs-position or historical (career) dataset, so
+#           those columns degrade gracefully (same as WNBA).
+#   NFL / NCAA Football — full projections via ESPN football game logs
+#           (passing/rushing/receiving). Football is weekly, so the "slate" is
+#           the games on the selected date; recent-form windows use the last
+#           N games regardless of how far back they span. NCAAF walks every FBS
+#           roster, so its refresh is the slowest (see scrapers/ncaaf.py).
+#
+# Sports without projections (NCAAB) still show odds + injuries via the
+# odds-only view; see app.py and scrapers/ncaa.py.
 SPORTS = {
     "NBA": {
         "key": "basketball_nba",
@@ -96,10 +103,10 @@ SPORTS = {
     "MLB": {
         "key": "baseball_mlb",
         "active": True,
-        # Odds + ESPN injuries + logos work; the basketball-only projection
-        # engine doesn't, so projections are off. See scrapers/mlb.py.
-        "projections": False,
-        "stats_source": None,
+        # Full projections via ESPN baseball game logs (batters + pitchers).
+        # See scrapers/mlb.py and config.SPORT_STAT_CONFIGS["baseball_mlb"].
+        "projections": True,
+        "stats_source": "espn",
         "espn_league": "mlb",
         "ml_models": False,
         "markets": [
@@ -116,10 +123,10 @@ SPORTS = {
     "NFL": {
         "key": "americanfootball_nfl",
         "active": True,
-        # Odds + ESPN injuries + logos work; projections off (basketball-only
-        # engine). See scrapers/nfl.py.
-        "projections": False,
-        "stats_source": None,
+        # Full projections via ESPN football game logs (QB/RB/WR/TE).
+        # See scrapers/nfl.py and config.SPORT_STAT_CONFIGS["americanfootball_nfl"].
+        "projections": True,
+        "stats_source": "espn",
         "espn_league": "nfl",
         "ml_models": False,
         "markets": [
@@ -135,10 +142,12 @@ SPORTS = {
     "NCAA Football": {
         "key": "americanfootball_ncaaf",
         "active": True,
-        # Same shape as NFL. ~130 FBS teams, no team-name map (pass-through);
-        # ESPN logos resolve by team id, not abbreviation, so logos are limited.
-        "projections": False,
-        "stats_source": None,
+        # Full projections via ESPN football game logs. ~130 FBS teams, no
+        # team-name map (pass-through); ESPN logos resolve by team id, not
+        # abbreviation, so logos are limited. Walking every FBS roster's game
+        # logs is the slowest refresh (see scrapers/ncaaf.py).
+        "projections": True,
+        "stats_source": "espn",
         "espn_league": "college-football",
         "ml_models": False,
         "markets": [
@@ -153,6 +162,98 @@ SPORTS = {
 }
 
 DEFAULT_SPORT = "NBA"
+
+
+# --- Per-sport projection stat definitions ----------------------------------
+# Each sport's projectable stats, as (stat_key, prop_type, label):
+#   stat_key  — the column the stats scraper emits and analysis.analyze_stat
+#               averages (recent/season) and grades vs the line.
+#   prop_type — the prop-line "type" string from scrapers/odds_api.MARKET_MAP;
+#               must match exactly so lines join to the right stat.
+#   label     — short UI label for the stat pills / picks-board columns.
+#
+# This is the single source of truth that makes the pipeline sport-aware: app.py
+# (STAT_CONFIGS / STAT_LABELS), analysis.build_player_summaries, and the scrapers
+# all read from here. Keyed by Odds-API sport key. Sports absent from this map
+# have no projections (NCAAB) and fall back to the odds-only view.
+SPORT_STAT_CONFIGS = {
+    "basketball_nba": [
+        ("points", "Total Points", "Points"),
+        ("rebounds", "Total Rebounds", "Rebounds"),
+        ("assists", "Total Assists", "Assists"),
+        ("pra", "Total PRA", "PRA"),
+        ("threes", "Total 3PM", "3PM"),
+        ("steals", "Total Steals", "Steals"),
+        ("blocks", "Total Blocks", "Blocks"),
+    ],
+    "basketball_wnba": [
+        ("points", "Total Points", "Points"),
+        ("rebounds", "Total Rebounds", "Rebounds"),
+        ("assists", "Total Assists", "Assists"),
+        ("pra", "Total PRA", "PRA"),
+        ("threes", "Total 3PM", "3PM"),
+        ("steals", "Total Steals", "Steals"),
+        ("blocks", "Total Blocks", "Blocks"),
+    ],
+    # MLB: batter stats then pitcher stats. Batters carry 0 for pitcher columns
+    # and vice versa (the two player groups are disjoint under the universal DH).
+    "baseball_mlb": [
+        ("hits", "Hits", "Hits"),
+        ("total_bases", "Total Bases", "Total Bases"),
+        ("home_runs", "Home Runs", "HR"),
+        ("rbis", "RBIs", "RBIs"),
+        ("runs", "Runs", "Runs"),
+        ("stolen_bases", "Stolen Bases", "SB"),
+        ("strikeouts_pitcher", "Pitcher Ks", "Pitcher Ks"),
+        ("hits_allowed", "Hits Allowed", "Hits Allowed"),
+        ("earned_runs", "Earned Runs", "Earned Runs"),
+        ("outs", "Outs", "Outs"),
+    ],
+    "americanfootball_nfl": [
+        ("pass_yards", "Pass Yards", "Pass Yds"),
+        ("pass_tds", "Pass TDs", "Pass TDs"),
+        ("completions", "Completions", "Cmp"),
+        ("interceptions", "Interceptions", "INT"),
+        ("rush_yards", "Rush Yards", "Rush Yds"),
+        ("rush_attempts", "Rush Attempts", "Rush Att"),
+        ("receptions", "Receptions", "Rec"),
+        ("receiving_yards", "Receiving Yards", "Rec Yds"),
+    ],
+    # NCAAF offers a narrower prop menu than the NFL (no completions/INT props).
+    "americanfootball_ncaaf": [
+        ("pass_yards", "Pass Yards", "Pass Yds"),
+        ("pass_tds", "Pass TDs", "Pass TDs"),
+        ("rush_yards", "Rush Yards", "Rush Yds"),
+        ("rush_attempts", "Rush Attempts", "Rush Att"),
+        ("receptions", "Receptions", "Rec"),
+        ("receiving_yards", "Receiving Yards", "Rec Yds"),
+    ],
+}
+
+
+def stat_configs_for(sport_key: str = "basketball_nba") -> list[tuple[str, str, str]]:
+    """Return [(stat_key, prop_type, label), ...] for a sport (NBA fallback)."""
+    return SPORT_STAT_CONFIGS.get(sport_key, SPORT_STAT_CONFIGS["basketball_nba"])
+
+
+def stat_keys_for(sport_key: str = "basketball_nba") -> list[str]:
+    """Return the ordered stat-column keys the sport projects."""
+    return [key for key, _pt, _label in stat_configs_for(sport_key)]
+
+
+def stat_labels_for(sport_key: str = "basketball_nba") -> dict[str, str]:
+    """Return an ordered {label: stat_key} map for the stat selector pills."""
+    return {label: key for key, _pt, label in stat_configs_for(sport_key)}
+
+
+def prop_to_stat_for(sport_key: str = "basketball_nba") -> dict[str, str]:
+    """Return a {prop_type: stat_key} map for joining odds lines to stats."""
+    return {pt: key for key, pt, _label in stat_configs_for(sport_key)}
+
+
+def stat_label_map(sport_key: str = "basketball_nba") -> dict[str, str]:
+    """Return a {stat_key: label} map (column headers / detail rows)."""
+    return {key: label for key, _pt, label in stat_configs_for(sport_key)}
 
 
 def active_sports() -> dict:

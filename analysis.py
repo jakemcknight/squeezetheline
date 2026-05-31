@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 
 import pandas as pd
@@ -75,12 +77,19 @@ def analyze_stat(
     todays_games: dict[str, str],
     defense: pd.DataFrame,
     game_date: datetime.date | None = None,
+    sport_key: str = "basketball_nba",
 ) -> pd.DataFrame:
     """
-    Core analysis for a single stat type (points, rebounds, assists).
+    Core analysis for a single stat type (e.g. points, hits, passing yards).
 
     Compares a player's recent and historical performance against their current
     prop line, factoring in opponent defense-vs-position rankings.
+
+    Sport-aware: works for any stat column the sport's scraper emits. The
+    career/history layer (historical hit%, vs-opponent career, home/away) is
+    only available for the NBA, which has the committed historical dataset;
+    other sports degrade gracefully (those columns come back empty/None). The
+    defense-vs-position rank is likewise NBA-only and blank elsewhere.
 
     Returns a DataFrame with one row per player who has a prop line set, including:
       - Season average, last-5 average, last-10 average
@@ -107,7 +116,10 @@ def analyze_stat(
     # --- Averages: full season, last 5, last 10 ---
     # Group by name only so traded players don't get split into multiple rows.
     # Their current team and position come from their most recent game.
-    df["pra"] = df["points"] + df["rebounds"] + df["assists"]
+    # PRA is a derived basketball stat; only synthesize it when its inputs exist
+    # and the scraper didn't already provide it (other sports have no PRA).
+    if stat == "pra" and "pra" not in df.columns and {"points", "rebounds", "assists"}.issubset(df.columns):
+        df["pra"] = df["points"] + df["rebounds"] + df["assists"]
     current_team = (
         df.sort_values("gameday", ascending=False)
         .drop_duplicates("name")[["name", "team-code", "position"]]
@@ -142,12 +154,15 @@ def analyze_stat(
         lambda x: todays_games.get(x, "")
     )
 
-    # --- Defense-vs-position rank ---
-    defense = defense.copy()
-    defense["team"] = defense["team"].apply(lambda x: TEAM_CODE_MAP.get(x, x))
-    defense_stat = defense[defense["stat"] == stat][["position", "team", "rank"]]
-    defense_stat = defense_stat.rename(columns={"team": "opponent"})
-    stat_props = stat_props.merge(defense_stat, how="left")
+    # --- Defense-vs-position rank (NBA only; empty/no-op for other sports) ---
+    if not defense.empty and {"stat", "team", "position", "rank"}.issubset(defense.columns):
+        defense = defense.copy()
+        defense["team"] = defense["team"].apply(lambda x: TEAM_CODE_MAP.get(x, x))
+        defense_stat = defense[defense["stat"] == stat][["position", "team", "rank"]]
+        defense_stat = defense_stat.rename(columns={"team": "opponent"})
+        stat_props = stat_props.merge(defense_stat, how="left")
+    else:
+        stat_props["rank"] = pd.NA
 
     # --- Volatility metrics ---
     std_dev = df.groupby("name")[stat].std().reset_index().rename(columns={stat: "std_dev"})
@@ -159,7 +174,9 @@ def analyze_stat(
     stat_props = stat_props.merge(spm, how="left")
 
     # --- Historical hit rate ---
-    history = load_historical_data()
+    # The committed historical dataset is NBA-only (basketball box-score schema),
+    # so career-based metrics are computed for the NBA and skipped elsewhere.
+    history = load_historical_data() if sport_key == "basketball_nba" else pd.DataFrame()
     if not history.empty:
         history = history.rename(columns={
             "player": "name", "team_code": "team", "opponent_code": "opponent",
@@ -187,7 +204,10 @@ def analyze_stat(
         )
         stat_props = stat_props.merge(hist_hit, how="left")
     else:
-        stat_props["history_hit%"] = None
+        # No career dataset for this sport: fall back to the season hit rate so
+        # the "history" column and the Strong Overs/Unders filters (which require
+        # a history-hit edge) stay meaningful rather than excluding every row.
+        stat_props["history_hit%"] = stat_props["hit%"]
 
     # --- Last-10 sparkline data: list of stat values most recent → oldest ---
     # We sort ascending by rank so most-recent is first; the inline bar chart
@@ -370,62 +390,94 @@ def build_player_summaries(
     current_stats: pd.DataFrame,
     props: pd.DataFrame,
     todays_games: dict[str, str] | None = None,
+    sport_key: str = "basketball_nba",
 ) -> dict:
     """
     Build a summary for each player who has a prop line today.
 
+    Sport-aware: every average/game-row carries the sport's own stat columns
+    (config.SPORT_STAT_CONFIGS), keyed by stat_key (e.g. "points" for the NBA,
+    "hits"/"total_bases" for MLB, "pass_yards" for football).
+
     Returns a dict keyed by player name. Each value contains:
       - team, position
-      - today_lines: {points, rebounds, assists}
-      - season_avg: {points, rebounds, assists, minutes, games}
-      - career_avg: {points, rebounds, assists, minutes, games}
-      - last_20: list of game dicts (most recent first)
+      - today_lines: {stat_key: line}
+      - season_avg / career_avg: {games, minutes, <stat_key>: avg, ...}
+      - last_20: list of game dicts (most recent first), each with
+        {date, opponent, min, <stat_key>: value, ...}
+      - vs_opponent / vs_opponent_avg / home_avg / away_avg
+
+    The career layer (career_avg, last_20, vs-opponent, home/away) is sourced
+    from the committed historical dataset for the NBA. Other sports have no such
+    dataset, so that layer falls back to the current season's game logs (still
+    useful: recent form, vs-opponent this season) and home/away splits are
+    omitted (the ESPN game log doesn't carry a reliable home/away flag).
     """
-    history = load_historical_data()
+    from config import stat_keys_for, prop_to_stat_for
+
+    stat_keys = stat_keys_for(sport_key)
+    prop_to_stat = prop_to_stat_for(sport_key)
+
+    # --- Career/history source (NBA only) -----------------------------------
     history_renamed = pd.DataFrame()
-    if not history.empty:
-        history_renamed = history.rename(columns={
-            "player": "name", "team_code": "team", "opponent_code": "opponent",
-            "pts": "points", "reb": "rebounds", "ast": "assists", "min": "minutes",
-            "threefm": "threes", "stl": "steals", "blk": "blocks",
-        })
-        # Coerce types
-        for col in ["points", "rebounds", "assists", "minutes"]:
-            history_renamed[col] = pd.to_numeric(history_renamed[col], errors="coerce").fillna(0)
-        for col in ("threes", "steals", "blocks"):
-            if col in history_renamed.columns:
+    if sport_key == "basketball_nba":
+        history = load_historical_data()
+        if not history.empty:
+            history_renamed = history.rename(columns={
+                "player": "name", "team_code": "team", "opponent_code": "opponent",
+                "pts": "points", "reb": "rebounds", "ast": "assists", "min": "minutes",
+                "threefm": "threes", "stl": "steals", "blk": "blocks",
+            })
+            for col in ["points", "rebounds", "assists", "minutes"]:
                 history_renamed[col] = pd.to_numeric(history_renamed[col], errors="coerce").fillna(0)
-        history_renamed["pra"] = history_renamed["points"] + history_renamed["rebounds"] + history_renamed["assists"]
-        history_renamed["gameday"] = pd.to_datetime(history_renamed["game_gameday"], errors="coerce")
+            for col in ("threes", "steals", "blocks"):
+                if col in history_renamed.columns:
+                    history_renamed[col] = pd.to_numeric(history_renamed[col], errors="coerce").fillna(0)
+            history_renamed["pra"] = history_renamed["points"] + history_renamed["rebounds"] + history_renamed["assists"]
+            history_renamed["gameday"] = pd.to_datetime(history_renamed["game_gameday"], errors="coerce")
+            # Normalize home/away into a single 'is_home' boolean
+            if "game_loc" in history_renamed.columns:
+                loc = history_renamed["game_loc"].astype(str).str.lower().str.strip()
+                history_renamed["is_home"] = loc.isin({"h", "home"})
+                if "game_home-code" in history_renamed.columns:
+                    missing = history_renamed["game_loc"].isna()
+                    history_renamed.loc[missing, "is_home"] = (
+                        history_renamed.loc[missing, "team"]
+                        == history_renamed.loc[missing, "game_home-code"]
+                    )
 
-        # Normalize home/away into a single 'is_home' boolean
-        # NatStat era used 'H'/'V', nba_api era uses 'home'/'away'
-        if "game_loc" in history_renamed.columns:
-            loc = history_renamed["game_loc"].astype(str).str.lower().str.strip()
-            home_marks = {"h", "home"}
-            history_renamed["is_home"] = loc.isin(home_marks)
-            # Where game_loc is missing, derive from team_code vs game_home-code
-            if "game_home-code" in history_renamed.columns:
-                missing = history_renamed["game_loc"].isna()
-                history_renamed.loc[missing, "is_home"] = (
-                    history_renamed.loc[missing, "team"]
-                    == history_renamed.loc[missing, "game_home-code"]
-                )
+    # When there's no career dataset, the current season's game logs stand in as
+    # the "career" source so the detail page still shows recent form / vs-opp.
+    has_real_history = not history_renamed.empty
+    career_source = history_renamed if has_real_history else current_stats
 
-    # Map prop type names to the stat column keys used elsewhere
-    prop_to_stat = {
-        "Total Points": "points",
-        "Total Rebounds": "rebounds",
-        "Total Assists": "assists",
-        "Total PRA": "pra",
-        "Total 3PM": "threes",
-        "Total Steals": "steals",
-        "Total Blocks": "blocks",
-    }
+    def _avg(df: pd.DataFrame, col: str) -> float:
+        return float(df[col].mean()) if col in df.columns and len(df) else 0.0
+
+    def _avg_dict(g: pd.DataFrame, extra: dict | None = None) -> dict:
+        d = {"games": int(len(g)), "minutes": _avg(g, "minutes")}
+        for k in stat_keys:
+            d[k] = _avg(g, k)
+        if extra:
+            d.update(extra)
+        return d
+
+    def _game_rows(g: pd.DataFrame, n: int) -> list[dict]:
+        rows = []
+        for _, r in g.sort_values("gameday", ascending=False).head(n).iterrows():
+            row = {
+                "date": str(r["gameday"].date()) if pd.notna(r.get("gameday")) else "",
+                "opponent": r.get("opponent", ""),
+                "min": float(r.get("minutes", 0) or 0),
+            }
+            for k in stat_keys:
+                row[k] = float(r.get(k, 0) or 0)
+            rows.append(row)
+        return rows
 
     summaries = {}
     for name in player_names:
-        # Today's lines (keyed by stat name)
+        # Today's lines (keyed by stat_key)
         player_props = props[props["name"] == name]
         today_lines = {}
         for _, row in player_props.iterrows():
@@ -433,27 +485,13 @@ def build_player_summaries(
             if stat_key:
                 today_lines[stat_key] = row["spread"]
 
-        # Season averages from current_stats (filter to games with minutes)
+        # Season averages from current_stats (games where the player appeared)
         season_games = current_stats[
-            (current_stats["name"] == name) & (current_stats["minutes"] != 0)
-        ]
+            (current_stats["name"] == name) & (current_stats.get("minutes", 0) != 0)
+        ] if "minutes" in current_stats.columns else current_stats[current_stats["name"] == name]
+        season_avg = _avg_dict(season_games)
 
-        def _avg(df: pd.DataFrame, col: str) -> float:
-            return float(df[col].mean()) if col in df.columns and len(df) else 0.0
-
-        season_avg = {
-            "games": int(len(season_games)),
-            "minutes": _avg(season_games, "minutes"),
-            "points": _avg(season_games, "points"),
-            "rebounds": _avg(season_games, "rebounds"),
-            "assists": _avg(season_games, "assists"),
-            "pra": _avg(season_games, "pra"),
-            "threes": _avg(season_games, "threes"),
-            "steals": _avg(season_games, "steals"),
-            "blocks": _avg(season_games, "blocks"),
-        }
-
-        # Use the most recent game for current team / position (handles traded players)
+        # Current team / position from the most recent game (handles trades)
         if len(season_games):
             most_recent = season_games.sort_values("gameday", ascending=False).iloc[0]
             team = most_recent["team-code"]
@@ -462,117 +500,43 @@ def build_player_summaries(
             team = ""
             position = ""
 
-        # Career averages from history (filter to games with minutes)
-        career_avg = {
-            "games": 0, "minutes": 0.0,
-            "points": 0.0, "rebounds": 0.0, "assists": 0.0,
-            "pra": 0.0, "threes": 0.0, "steals": 0.0, "blocks": 0.0,
-        }
+        # Career averages + last-20 + vs-opponent from the career source
+        career_avg = _avg_dict(career_source.iloc[0:0])  # zeroed template
         last_20 = []
         vs_opponent = []
-        if not history_renamed.empty:
-            career_games = history_renamed[
-                (history_renamed["name"] == name) & (history_renamed["minutes"] != 0)
-            ]
-            if len(career_games):
-                career_avg = {
-                    "games": int(len(career_games)),
-                    "minutes": _avg(career_games, "minutes"),
-                    "points": _avg(career_games, "points"),
-                    "rebounds": _avg(career_games, "rebounds"),
-                    "assists": _avg(career_games, "assists"),
-                    "pra": _avg(career_games, "pra"),
-                    "threes": _avg(career_games, "threes"),
-                    "steals": _avg(career_games, "steals"),
-                    "blocks": _avg(career_games, "blocks"),
-                }
-                # Last 20 games (sorted most recent first)
-                last_20_df = career_games.sort_values("gameday", ascending=False).head(20)
-                for _, g in last_20_df.iterrows():
-                    last_20.append({
-                        "date": str(g["gameday"].date()) if pd.notna(g["gameday"]) else "",
-                        "opponent": g.get("opponent", ""),
-                        "min": float(g["minutes"]),
-                        "pts": float(g["points"]),
-                        "reb": float(g["rebounds"]),
-                        "ast": float(g["assists"]),
-                        "pra": float(g.get("pra", 0)),
-                        "threes": float(g.get("threes", 0)),
-                        "steals": float(g.get("steals", 0)),
-                        "blocks": float(g.get("blocks", 0)),
-                    })
-
-        # --- Historical performance vs tonight's opponent ---
-        vs_opponent = []
         vs_opponent_avg = None
-        if todays_games and team and not history_renamed.empty:
-            opp = todays_games.get(team, "")
-            if opp:
-                vs_games = history_renamed[
-                    (history_renamed["name"] == name)
-                    & (history_renamed["opponent"] == opp)
-                    & (history_renamed["minutes"] != 0)
-                ].sort_values("gameday", ascending=False)
-                for _, g in vs_games.head(10).iterrows():
-                    vs_opponent.append({
-                        "date": str(g["gameday"].date()) if pd.notna(g["gameday"]) else "",
-                        "opponent": g.get("opponent", ""),
-                        "min": float(g["minutes"]),
-                        "pts": float(g["points"]),
-                        "reb": float(g["rebounds"]),
-                        "ast": float(g["assists"]),
-                        "pra": float(g.get("pra", 0)),
-                        "threes": float(g.get("threes", 0)),
-                        "steals": float(g.get("steals", 0)),
-                        "blocks": float(g.get("blocks", 0)),
-                    })
-                if len(vs_games):
-                    vs_opponent_avg = {
-                        "games": int(len(vs_games)),
-                        "opponent": opp,
-                        "minutes": _avg(vs_games, "minutes"),
-                        "points": _avg(vs_games, "points"),
-                        "rebounds": _avg(vs_games, "rebounds"),
-                        "assists": _avg(vs_games, "assists"),
-                        "pra": _avg(vs_games, "pra"),
-                        "threes": _avg(vs_games, "threes"),
-                        "steals": _avg(vs_games, "steals"),
-                        "blocks": _avg(vs_games, "blocks"),
-                    }
+        if "name" in career_source.columns:
+            career_games = career_source[career_source["name"] == name]
+            if "minutes" in career_games.columns:
+                career_games = career_games[career_games["minutes"] != 0]
+            if len(career_games):
+                career_avg = _avg_dict(career_games)
+                last_20 = _game_rows(career_games, 20)
 
-        # --- Home/Away splits (career) ---
+            # Performance vs tonight's opponent
+            if todays_games and team and "opponent" in career_games.columns:
+                opp = todays_games.get(team, "")
+                if opp:
+                    vs_games = career_games[career_games["opponent"] == opp].sort_values(
+                        "gameday", ascending=False
+                    )
+                    vs_opponent = _game_rows(vs_games, 10)
+                    if len(vs_games):
+                        vs_opponent_avg = _avg_dict(vs_games, {"opponent": opp})
+
+        # Home/Away splits — career dataset only (no reliable flag elsewhere)
         home_avg = None
         away_avg = None
-        if not history_renamed.empty and "is_home" in history_renamed.columns:
+        if has_real_history and "is_home" in history_renamed.columns:
             player_career = history_renamed[
                 (history_renamed["name"] == name) & (history_renamed["minutes"] != 0)
             ]
             home_games = player_career[player_career["is_home"] == True]  # noqa: E712
             away_games = player_career[player_career["is_home"] == False]  # noqa: E712
             if len(home_games):
-                home_avg = {
-                    "games": int(len(home_games)),
-                    "minutes": _avg(home_games, "minutes"),
-                    "points": _avg(home_games, "points"),
-                    "rebounds": _avg(home_games, "rebounds"),
-                    "assists": _avg(home_games, "assists"),
-                    "pra": _avg(home_games, "pra"),
-                    "threes": _avg(home_games, "threes"),
-                    "steals": _avg(home_games, "steals"),
-                    "blocks": _avg(home_games, "blocks"),
-                }
+                home_avg = _avg_dict(home_games)
             if len(away_games):
-                away_avg = {
-                    "games": int(len(away_games)),
-                    "minutes": _avg(away_games, "minutes"),
-                    "points": _avg(away_games, "points"),
-                    "rebounds": _avg(away_games, "rebounds"),
-                    "assists": _avg(away_games, "assists"),
-                    "pra": _avg(away_games, "pra"),
-                    "threes": _avg(away_games, "threes"),
-                    "steals": _avg(away_games, "steals"),
-                    "blocks": _avg(away_games, "blocks"),
-                }
+                away_avg = _avg_dict(away_games)
 
         summaries[name] = {
             "team": team,
@@ -585,6 +549,7 @@ def build_player_summaries(
             "vs_opponent_avg": vs_opponent_avg,
             "home_avg": home_avg,
             "away_avg": away_avg,
+            "has_career": bool(has_real_history),
         }
 
     return summaries

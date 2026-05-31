@@ -1,46 +1,53 @@
 """
-NFL player stats & positions — NOT WIRED (projections stubbed).
+NFL player stats & positions, sourced from ESPN.
 
-Odds (scrapers/odds_api.py with sport_key="americanfootball_nfl") and injuries
-(scrapers/espn.py / ESPN league "nfl") work today, so the NFL is selectable and
-shows player-prop lines + injury context. What's missing is *projections*.
+Projections are live: ESPN's free football game-log endpoints back
+passing/rushing/receiving production for QB/RB/WR/TE. A single game-log feed
+carries whichever categories a player accrues (a QB's passing + rushing, a WR's
+receiving + rushing, etc.); the parser reads each stat by name, so one code path
+covers every position. See config.SPORT_STAT_CONFIGS["americanfootball_nfl"] for
+the stat→prop-line mapping.
 
-Why it's stubbed rather than implemented:
-  The projection engine (analysis.py / data.py) and the Picks Board UI assume
-  basketball box-score columns (points, rebounds, assists, threes, steals,
-  blocks, pra). Football stats are completely different (passing/rushing/
-  receiving yards, attempts, completions, TDs, receptions) and split by
-  position group (QB/RB/WR/TE), so the basketball pipeline can't project them.
+These wrappers expose the same interface as scrapers/nba.py so the dispatcher in
+scrapers/sources.py can treat them interchangeably. They're slate-scoped: only
+the teams playing in the selected week (and only their prop players) are walked.
 
-What a stats source WOULD need (then set projections=True + a stats_source in
-config.py AND add a football-aware analysis path):
-  1. A per-game player game-log feed (ESPN football gamelog endpoints exist:
-     site.web.api.espn.com/.../football/nfl/athletes/{id}/gamelog).
-  2. Football-appropriate projection columns + line types (pass yds/TDs/
-     completions, rush yds/att/TDs, receptions, receiving yds/TDs).
-  3. A board/analysis variant that ranks edges on those columns.
-
-Football is also weekly (one slate/week) rather than nightly, which the
-date-driven slate model would need to account for.
+Football is weekly rather than nightly, so a "slate" is the games on the selected
+date and recent-form windows use the last N games regardless of span.
 """
+
+import datetime
 
 import pandas as pd
 
-_STATS_COLUMNS = [
-    "name", "team-code", "opponent", "gameday", "minutes",
-    "points", "rebounds", "assists", "threes", "steals", "blocks", "pra",
-]
-_POSITION_COLUMNS = ["name", "position", "player_id", "player_url"]
+from scrapers import espn
+
+LEAGUE = "nfl"
 
 
-def get_current_season_stats() -> pd.DataFrame:
-    """STUB: no NFL player season-stats source wired yet. Returns empty.
+def _season() -> int:
+    """ESPN's NFL season id is the year the season *starts*; Jan–Jul dates still
+    belong to the prior year's season (playoffs/offseason), so roll back."""
+    today = datetime.date.today()
+    return today.year if today.month >= 8 else today.year - 1
 
-    See the module docstring for what enabling projections would require.
+
+def get_current_season_stats(team_codes=None, player_names=None) -> pd.DataFrame:
+    """Per-game player stats for the slate's players (ESPN).
+
+    Columns: name, team-code, opponent, gameday, minutes + the football stat
+    columns (pass_yards, pass_tds, completions, pass_attempts, interceptions,
+    rush_yards, rush_attempts, rush_tds, receptions, receiving_yards,
+    receiving_tds).
     """
-    return pd.DataFrame(columns=_STATS_COLUMNS)
+    return espn.get_slate_stats(
+        LEAGUE, team_codes=team_codes, player_names=player_names, season=_season(),
+    )
 
 
-def get_player_positions() -> pd.DataFrame:
-    """STUB: no NFL player-positions source wired yet. Returns empty."""
-    return pd.DataFrame(columns=_POSITION_COLUMNS)
+def get_player_positions(team_codes=None) -> pd.DataFrame:
+    """NFL player positions for the slate teams (ESPN rosters).
+
+    Columns: name, position (QB/RB/WR/TE/...), player_id, player_url.
+    """
+    return espn.get_player_positions(LEAGUE, team_codes=team_codes)
