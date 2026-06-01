@@ -20,8 +20,8 @@ export interface ParlayLeg {
   line: number;
   edge: number;
   confidence: number;
-  recommendation: string; // human label, e.g. "Strong Over"
-  side: string; // "over" | "under" | "none"
+  recommendation: string;
+  side: string;
 }
 
 interface ParlayContextValue {
@@ -32,9 +32,7 @@ interface ParlayContextValue {
   clear: () => void;
   has: (id: string) => boolean;
   count: number;
-  /** Compounded edge across legs (product of 1+|edge| − 1), as a percentage. */
   combinedEdge: number;
-  /** Mean confidence across legs (0–100). */
   avgConfidence: number;
 }
 

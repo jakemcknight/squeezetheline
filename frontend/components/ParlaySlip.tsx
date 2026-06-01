@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useParlay } from "@/lib/parlay";
+import { useParlay } from "@/context/ParlayContext";
 import { signed } from "@/lib/format";
 
 export function ParlaySlip() {
@@ -84,7 +84,7 @@ export function ParlaySlip() {
                     type="button"
                     onClick={() => remove(leg.id)}
                     aria-label={`Remove ${leg.player}`}
-                    className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-rose-400"
+                    className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-rose-400"
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
                       <path

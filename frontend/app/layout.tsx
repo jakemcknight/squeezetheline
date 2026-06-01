@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { NavBar } from "@/components/NavBar";
 import { AuthProvider } from "@/components/AuthProvider";
-import { ParlayProvider } from "@/lib/parlay";
+import { ParlayProvider } from "@/context/ParlayContext";
 import { ParlaySlip } from "@/components/ParlaySlip";
 
 export const metadata: Metadata = {

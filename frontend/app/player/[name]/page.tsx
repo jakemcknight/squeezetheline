@@ -42,7 +42,7 @@ export default function PlayerPage() {
 }
 
 function PlayerView({ data }: { data: PlayerDetail }) {
-  const primaryGames = data.last_games;
+  const primaryGames = data.last_games.slice(0, 10);
   const primaryRate = data.hit_rates.find(
     (h) => h.stat_type === data.primary_stat
   );
@@ -50,7 +50,7 @@ function PlayerView({ data }: { data: PlayerDetail }) {
   return (
     <div className="space-y-6">
       {/* header */}
-      <div className="flex flex-col gap-4 rounded-2xl border border-border bg-surface p-5 sm:flex-row sm:items-center sm:justify-between animate-fade-up">
+      <div className="flex flex-col gap-4 rounded-2xl border border-border bg-surface p-5 sm:flex-row sm:items-center sm:justify-between animate-fade-up transition-all duration-200 hover:border-emerald-500/30">
         <div className="flex items-center gap-4">
           <TeamLogo
             sport={data.sport}
@@ -92,7 +92,7 @@ function PlayerView({ data }: { data: PlayerDetail }) {
           {Object.entries(data.season_averages).map(([stat, avg]) => (
             <div
               key={stat}
-              className="rounded-xl border border-border bg-surface px-4 py-3"
+              className="rounded-xl border border-border bg-surface px-4 py-3 transition-all duration-200 hover:border-emerald-500/30"
             >
               <div className="truncate text-xs uppercase tracking-wide text-muted">
                 {stat}
@@ -110,7 +110,7 @@ function PlayerView({ data }: { data: PlayerDetail }) {
         <h2 className="text-sm font-semibold uppercase tracking-wide">
           {data.primary_stat} Trend
         </h2>
-        <div className="rounded-2xl border border-border bg-surface p-5">
+        <div className="rounded-2xl border border-border bg-surface p-5 transition-all duration-200 hover:border-emerald-500/30">
           <TrendChart
             games={primaryGames}
             line={primaryRate?.line ?? 0}
@@ -165,8 +165,8 @@ function PlayerView({ data }: { data: PlayerDetail }) {
           <h2 className="text-sm font-semibold uppercase tracking-wide">
             Last {data.last_games.length} Games — {data.primary_stat}
           </h2>
-          <div className="overflow-hidden rounded-2xl border border-border bg-surface">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto rounded-2xl border border-border bg-surface transition-all duration-200 hover:border-emerald-500/30">
+            <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted">
                   <th className="px-4 py-2.5 font-medium">Date</th>

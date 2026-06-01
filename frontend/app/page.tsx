@@ -6,6 +6,8 @@ import { api, API_BASE, type Pick, type Sport } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { SportTabs } from "@/components/SportTabs";
 import { PickCard } from "@/components/PickCard";
+import { SkeletonCard } from "@/components/SkeletonCard";
+import { SkeletonTable } from "@/components/SkeletonTable";
 import { pct, signed, confidenceTier } from "@/lib/format";
 
 const DEFAULT_DATE = "2026-05-31";
@@ -138,7 +140,7 @@ function SummaryBar({ picks, groups }: { picks: Pick[]; groups: Groups }) {
       {items.map((it) => (
         <div
           key={it.label}
-          className="rounded-xl border border-border bg-surface px-4 py-3"
+          className="rounded-xl border border-border bg-surface px-4 py-3 transition-all duration-200 hover:border-emerald-500/30"
         >
           <div className="text-xs uppercase tracking-wide text-muted">
             {it.label}
@@ -298,18 +300,23 @@ function TabsSkeleton() {
 
 function BoardSkeleton() {
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-      {Array.from({ length: 3 }).map((_, col) => (
-        <div key={col} className="space-y-3">
-          <div className="h-5 w-32 animate-pulse rounded bg-surface-2" />
-          {Array.from({ length: 2 }).map((_, i) => (
-            <div
-              key={i}
-              className="h-40 animate-pulse rounded-xl bg-surface"
-            />
-          ))}
-        </div>
-      ))}
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="skeleton h-[72px] rounded-xl" />
+        ))}
+      </div>
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, col) => (
+          <div key={col} className="space-y-3">
+            <div className="skeleton h-5 w-32" />
+            {Array.from({ length: 2 }).map((_, i) => (
+              <SkeletonCard key={i} />
+            ))}
+          </div>
+        ))}
+      </div>
+      <SkeletonTable rows={5} />
     </div>
   );
 }

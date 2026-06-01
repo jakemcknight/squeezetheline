@@ -5,7 +5,7 @@ import type { Pick } from "@/lib/api";
 import { confidenceTier, pct, signed, trendGlyph } from "@/lib/format";
 import { SavePickButton } from "@/components/SavePickButton";
 import { TeamLogo } from "@/components/TeamLogo";
-import { useParlay } from "@/lib/parlay";
+import { useParlay } from "@/context/ParlayContext";
 
 const accent: Record<
   string,
@@ -68,7 +68,7 @@ export function PickCard({ pick, sport }: { pick: Pick; sport: string }) {
   return (
     <Link
       href={`/player/${encodeURIComponent(pick.player)}?sport=${sport}`}
-      className={`group block rounded-xl border border-border bg-surface p-4 transition-all hover:bg-surface-2 ${a.ring} animate-fade-up`}
+      className={`group block rounded-xl border border-border bg-surface p-4 transition-all duration-200 hover:bg-surface-2 hover:border-emerald-500/30 animate-fade-up`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -115,7 +115,7 @@ export function PickCard({ pick, sport }: { pick: Pick; sport: string }) {
             <span className="text-2xl font-bold tabular-nums text-foreground">
               {pick.projection}
             </span>
-            <span className={`text-xs font-semibold tabular-nums ${a.edge}`}>
+            <span className={`text-xs font-semibold tabular-nums ${pick.edge >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
               {signed(pick.edge)}
             </span>
           </div>
@@ -178,7 +178,7 @@ export function PickCard({ pick, sport }: { pick: Pick; sport: string }) {
         type="button"
         onClick={onParlay}
         aria-pressed={inParlay}
-        className={`mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg text-sm font-semibold transition-colors ${
+        className={`mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg text-sm font-semibold transition-colors ${
           inParlay
             ? "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/40 hover:bg-emerald-500/25"
             : "bg-surface-2 text-foreground ring-1 ring-border hover:bg-slate-700/40"
