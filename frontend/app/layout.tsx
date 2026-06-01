@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { NavBar } from "@/components/NavBar";
 import { AuthProvider } from "@/components/AuthProvider";
+import { ParlayProvider } from "@/lib/parlay";
+import { ParlaySlip } from "@/components/ParlaySlip";
 
 export const metadata: Metadata = {
   title: "Squeeze the Line — Player Prop Projections",
@@ -18,10 +20,13 @@ export default function RootLayout({
     <html lang="en">
       <body className="antialiased">
         <AuthProvider>
-          <NavBar />
-          <main className="mx-auto w-full max-w-7xl px-4 pb-20 pt-6 sm:px-6">
-            {children}
-          </main>
+          <ParlayProvider>
+            <NavBar />
+            <main className="mx-auto w-full max-w-7xl px-4 pb-28 pt-6 sm:px-6">
+              {children}
+            </main>
+            <ParlaySlip />
+          </ParlayProvider>
         </AuthProvider>
       </body>
     </html>

@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import { api, type PlayerDetail } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { TrendChart } from "@/components/TrendChart";
+import { TeamLogo } from "@/components/TeamLogo";
 import { pct, formatDate } from "@/lib/format";
 
 export default function PlayerPage() {
@@ -51,9 +52,12 @@ function PlayerView({ data }: { data: PlayerDetail }) {
       {/* header */}
       <div className="flex flex-col gap-4 rounded-2xl border border-border bg-surface p-5 sm:flex-row sm:items-center sm:justify-between animate-fade-up">
         <div className="flex items-center gap-4">
-          <div className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-emerald-500/20 to-sky-500/20 text-xl font-bold text-emerald-300 ring-1 ring-border">
-            {initials(data.name)}
-          </div>
+          <TeamLogo
+            sport={data.sport}
+            abbr={data.team_abbr}
+            size={56}
+            className="rounded-xl bg-surface-2 p-1.5 ring-1 ring-border"
+          />
           <div>
             <h1 className="text-2xl font-bold tracking-tight">{data.name}</h1>
             <div className="mt-1 text-sm text-muted">
@@ -222,15 +226,6 @@ function HeaderStat({ label, value }: { label: string; value: string }) {
       <div className="mt-0.5 text-xl font-bold tabular-nums">{value}</div>
     </div>
   );
-}
-
-function initials(name: string): string {
-  return name
-    .split(" ")
-    .slice(0, 2)
-    .map((s) => s[0])
-    .join("")
-    .toUpperCase();
 }
 
 function fmt(v: number): string {

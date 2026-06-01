@@ -71,7 +71,50 @@ export default function InjuriesPage() {
           Couldn&apos;t load injuries. {injState.error}
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border bg-surface">
+        <>
+        {/* Mobile: stacked cards */}
+        <div className="space-y-3 sm:hidden">
+          {filtered.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border bg-surface/50 px-4 py-10 text-center text-sm text-muted">
+              No injuries match “{query}”.
+            </div>
+          ) : (
+            filtered.map((inj, i) => (
+              <div
+                key={`m-${inj.player}-${i}`}
+                className="rounded-xl border border-border bg-surface p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-foreground">
+                      {inj.player}
+                    </div>
+                    <div className="mt-0.5 text-xs text-muted">
+                      {inj.team_abbr} · {inj.position}
+                    </div>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-md px-2 py-1 text-xs font-semibold ring-1 ${statusStyle(
+                      inj.status
+                    )}`}
+                  >
+                    {inj.status}
+                  </span>
+                </div>
+                <div className="mt-2 text-sm text-foreground">{inj.injury}</div>
+                {inj.note && (
+                  <div className="mt-1 text-xs text-muted">{inj.note}</div>
+                )}
+                <div className="mt-2 text-[11px] text-muted">
+                  Updated {formatDate(inj.updated)}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Desktop: table */}
+        <div className="hidden overflow-x-auto rounded-xl border border-border bg-surface sm:block">
           <table className="w-full min-w-[720px] text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted">
@@ -124,6 +167,7 @@ export default function InjuriesPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
     </div>
   );
