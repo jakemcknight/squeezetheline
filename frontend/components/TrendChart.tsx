@@ -104,8 +104,8 @@ export function TrendChart({
         </span>
       </div>
 
-      <div className="h-56 w-full">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="w-full">
+        <ResponsiveContainer width="100%" height={224} minHeight={224} debounce={1}>
           <BarChart data={data} margin={{ top: 18, right: 6, bottom: 0, left: -18 }}>
             <XAxis
               dataKey="opp"
