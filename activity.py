@@ -5,8 +5,11 @@ Logs every login, nav change, player view, pick save, AI query, etc.
 to a Supabase `user_activity` table so we can see who's using the
 platform and what they're doing.
 
-Writes go through the service-role key (needed to bypass RLS). Reads
-for the admin analytics view use the anon key.
+Writes go through the service-role key (needed to bypass RLS). The
+admin analytics reads also use the service-role key: RLS on
+user_activity scopes anon-key reads to a user's *own* rows, so the
+cross-user analytics view (admin-gated) must bypass RLS to see
+everyone's activity.
 
 Each log call runs in a background thread so it never blocks the UI.
 """
@@ -48,11 +51,6 @@ def _admin_client():
         return create_client(url, key)
     except Exception:
         return None
-
-
-def _anon_client():
-    from auth import get_supabase
-    return get_supabase()
 
 
 def _current_user_info() -> Optional[dict]:
@@ -111,8 +109,8 @@ def log_once_per_session(key: str, action: str, details: Optional[dict] = None):
 # --- Query helpers for the admin analytics view ---
 
 def fetch_recent_activity(limit: int = 500) -> pd.DataFrame:
-    """Most-recent N events."""
-    sb = _anon_client()
+    """Most-recent N events (admin-only, cross-user → service-role bypasses RLS)."""
+    sb = _admin_client()
     if not sb:
         return pd.DataFrame()
     try:
@@ -123,8 +121,8 @@ def fetch_recent_activity(limit: int = 500) -> pd.DataFrame:
 
 
 def fetch_activity_since(days: int = 30) -> pd.DataFrame:
-    """All events in the last N days."""
-    sb = _anon_client()
+    """All events in the last N days (admin-only, cross-user → service-role bypasses RLS)."""
+    sb = _admin_client()
     if not sb:
         return pd.DataFrame()
     since = (datetime.datetime.utcnow() - datetime.timedelta(days=days)).isoformat() + "Z"

@@ -72,13 +72,55 @@ create table if not exists public.alerts (
 create index if not exists alerts_user_idx on public.alerts (user_id, created_at desc);
 
 -- ---------------------------------------------------------------------------
+-- user_activity: analytics event log (login, page view, AI query, etc.).
+-- Written with the service-role key (activity.log). Read two ways:
+--   * admin analytics view  -> service-role key (cross-user, bypasses RLS)
+--   * any direct anon access -> restricted to the user's own rows by RLS
+-- user_id is the Supabase auth user id stored as text.
+-- ---------------------------------------------------------------------------
+create table if not exists public.user_activity (
+    id          uuid primary key default gen_random_uuid(),
+    user_id     text not null,
+    user_email  text not null default '',
+    action      text not null,
+    details     jsonb not null default '{}'::jsonb,
+    created_at  timestamptz not null default now()
+);
+
+create index if not exists user_activity_created_idx on public.user_activity (created_at desc);
+create index if not exists user_activity_user_idx on public.user_activity (user_id, created_at desc);
+
+-- ---------------------------------------------------------------------------
+-- parlays: multi-leg parlay tickets a user has saved for ROI tracking.
+-- Written/deleted with the service-role key; read with the anon key scoped to
+-- the signed-in user. Keyed by user_email (matches parlays.py).
+-- ---------------------------------------------------------------------------
+create table if not exists public.parlays (
+    id                      uuid primary key default gen_random_uuid(),
+    user_email              text not null,
+    name                    text not null default '',
+    legs                    jsonb not null default '[]'::jsonb,
+    combined_odds_american  integer not null default 0,
+    combined_odds_decimal   double precision not null default 1.0,
+    implied_pct             double precision not null default 0.0,
+    estimated_hit_pct       double precision not null default 0.0,
+    stake                   double precision not null default 0.0,
+    status                  text not null default 'open',  -- open | won | lost | void
+    created_at              timestamptz not null default now()
+);
+
+create index if not exists parlays_user_idx on public.parlays (user_email, created_at desc);
+
+-- ---------------------------------------------------------------------------
 -- Row Level Security: each user may only see/modify their own rows.
 -- (The API uses the service-role key, which bypasses RLS; these policies guard
 -- any direct client access with the anon key.)
 -- ---------------------------------------------------------------------------
-alter table public.saved_picks  enable row level security;
-alter table public.pick_results enable row level security;
-alter table public.alerts       enable row level security;
+alter table public.saved_picks   enable row level security;
+alter table public.pick_results  enable row level security;
+alter table public.alerts        enable row level security;
+alter table public.user_activity enable row level security;
+alter table public.parlays       enable row level security;
 
 create policy "saved_picks are owned by the user"
     on public.saved_picks
@@ -97,3 +139,19 @@ create policy "alerts are owned by the user"
     for all
     using (auth.uid() = user_id)
     with check (auth.uid() = user_id);
+
+-- user_activity: anon-key reads are limited to the signed-in user's own rows.
+-- (Writes and the cross-user admin analytics view use the service-role key,
+-- which bypasses RLS, so only a SELECT policy is needed here. user_id is text,
+-- so we cast auth.uid() to text to compare.)
+create policy "user_activity is readable by its owner"
+    on public.user_activity
+    for select
+    using (auth.uid()::text = user_id);
+
+-- parlays: anon-key reads are limited to the signed-in user's own rows, matched
+-- by the email in their JWT. (Writes/deletes use the service-role key.)
+create policy "parlays are readable by their owner"
+    on public.parlays
+    for select
+    using ((auth.jwt() ->> 'email') = user_email);
