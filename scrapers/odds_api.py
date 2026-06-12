@@ -63,7 +63,26 @@ MARKET_MAP = {
     "player_reception_yds": "Receiving Yards",
     "player_reception_tds": "Receiving TDs",
     "player_kicking_points": "Kicking Points",
+    # --- Soccer (FIFA World Cup) ---
+    # "Shots", "Shots on Target" and assists (reusing "Total Assists") are real
+    # over/under lines. "Anytime Goalscorer" and "To Receive a Card" are Yes/No
+    # markets the parser rewrites to a synthetic Over-0.5 line on goals / cards
+    # (see SOCCER_YES_NO_MARKETS). first/last goalscorer and red-card markets are
+    # intentionally NOT mapped — they're event-timing/ordering bets the projection
+    # model can't ground in per-player rates, so they're left unsupported.
+    "player_goal_scorer_anytime": "Anytime Goalscorer",
+    "player_shots": "Shots",
+    "player_shots_on_target": "Shots on Target",
+    "player_to_receive_card": "To Receive a Card",
 }
+
+# Soccer Yes/No prop markets (no numeric line in the feed). We map each to a
+# synthetic Over-0.5 line on the matching counting stat so they flow through the
+# same over/under pipeline as every other prop: scoring ≥1 goal == "Over 0.5
+# goals" == anytime goalscorer; ≥1 card == "Over 0.5 cards". Only the "Yes"
+# outcome is kept (its price is the book's implied scorer/card probability).
+SOCCER_YES_NO_MARKETS = {"player_goal_scorer_anytime", "player_to_receive_card"}
+SYNTHETIC_YESNO_LINE = 0.5
 
 # Odds API sport key -> the markets to request, taken from config.SPORTS so the
 # list stays in one place. Defaults to the NBA set for unknown keys.
@@ -176,6 +195,23 @@ def get_event_alt_props(event_id: str, player: str, stat_market: str,
     return rows
 
 
+def _outcome_line(market_key: str, outcome: dict):
+    """Extract (player, spread) from a single odds outcome, or None to skip.
+
+    Over/under markets contribute their "Over" outcome (carrying a numeric
+    point). Soccer Yes/No markets (SOCCER_YES_NO_MARKETS) have no point, so we
+    take the "Yes" outcome and synthesize an Over-0.5 line on the matching stat.
+    """
+    name = outcome.get("name")
+    if market_key in SOCCER_YES_NO_MARKETS:
+        if name != "Yes":
+            return None
+        return outcome.get("description"), SYNTHETIC_YESNO_LINE
+    if name == "Over":
+        return outcome.get("description"), outcome.get("point")
+    return None
+
+
 def get_event_props(event_id: str, all_books: bool = False,
                     sport_key: str = "basketball_nba") -> list[dict]:
     """
@@ -227,14 +263,17 @@ def get_event_props(event_id: str, all_books: bool = False,
                 if prop_type is None:
                     continue
                 for outcome in market.get("outcomes", []):
-                    if outcome["name"] == "Over":
-                        props.append({
-                            "type": prop_type,
-                            "player": outcome["description"],
-                            "spread": outcome["point"],
-                            "price": outcome.get("price"),
-                            "book": book_key,
-                        })
+                    parsed = _outcome_line(market["key"], outcome)
+                    if parsed is None:
+                        continue
+                    player, spread = parsed
+                    props.append({
+                        "type": prop_type,
+                        "player": player,
+                        "spread": spread,
+                        "price": outcome.get("price"),
+                        "book": book_key,
+                    })
         return props
 
     # Single-book mode: prefer DraftKings, fall back to whatever is available
@@ -252,12 +291,15 @@ def get_event_props(event_id: str, all_books: bool = False,
         if prop_type is None:
             continue
         for outcome in market.get("outcomes", []):
-            if outcome["name"] == "Over":
-                props.append({
-                    "type": prop_type,
-                    "player": outcome["description"],
-                    "spread": outcome["point"],
-                })
+            parsed = _outcome_line(market["key"], outcome)
+            if parsed is None:
+                continue
+            player, spread = parsed
+            props.append({
+                "type": prop_type,
+                "player": player,
+                "spread": spread,
+            })
     return props
 
 

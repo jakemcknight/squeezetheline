@@ -458,9 +458,9 @@ with st.sidebar:
         "Sport",
         options=_sport_names,
         index=_default_sport_idx,
-        help="NBA, WNBA, MLB, NFL and NCAA football have full projections "
-             "(recent form, hit rates, confidence). NCAA basketball shows odds + "
-             "injuries only — no player-stats source is wired for it yet.",
+        help="NBA, WNBA, MLB, NFL, NCAA football and the FIFA World Cup have full "
+             "projections (recent form, hit rates, confidence). NCAA basketball "
+             "shows odds + injuries only — no player-stats source is wired for it yet.",
     )
     _sport_cfg = sport_config(selected_sport)
     sport_key = _sport_cfg["key"]
@@ -1206,6 +1206,7 @@ if nav_choice == "AI Analysis" and is_admin():
                 side=ai_side.lower(),
                 summary=summaries.get(ai_player, {}),
                 result_row=result_row,
+                sport_label=selected_sport,
             )
             try:
                 from activity import log, ACTION_AI_ANALYSIS

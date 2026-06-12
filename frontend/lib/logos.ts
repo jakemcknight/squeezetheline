@@ -11,6 +11,9 @@ const ESPN_LEAGUE: Record<string, string> = {
   football_ncaaf: "college-football",
   basketball_ncaab: "mens-college-basketball",
   basketball_mens_ncaa: "mens-college-basketball",
+  // World Cup national teams live under ESPN's "countries" logo set, keyed by
+  // the same 3-letter code we use (e.g. .../teamlogos/countries/500/arg.png).
+  soccer_fifa_world_cup: "countries",
 };
 
 export function teamLogoUrl(sport: string, abbr: string): string | null {

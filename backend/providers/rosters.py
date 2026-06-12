@@ -54,6 +54,15 @@ SPORTS = [
         "active": False,
         "stat_types": ["Points", "Rebounds", "Assists", "3-Pointers Made"],
     },
+    {
+        "key": "soccer_fifa_world_cup",
+        "name": "FIFA World Cup",
+        "full_name": "FIFA World Cup 2026",
+        "icon": "⚽",
+        "season": "in-season",
+        "active": True,
+        "stat_types": ["Goals", "Shots", "Shots on Target", "Assists", "Cards"],
+    },
 ]
 
 # sport key -> list of players with season-average baselines per stat type.
@@ -169,6 +178,35 @@ ROSTERS = {
         {"name": "Walter Clayton Jr.", "team": "Florida Gators", "team_abbr": "FLA", "position": "G",
          "stats": {"Points": 18.3, "Rebounds": 3.6, "Assists": 4.2, "3-Pointers Made": 2.7}},
     ],
+    # Soccer baselines are per-match rates. Goals/Cards baselines below 1.0 round
+    # to a 0.5 line, matching the Yes/No (anytime-goalscorer / to-be-carded)
+    # markets; Shots/SOT/Assists round to plausible over/under lines.
+    "soccer_fifa_world_cup": [
+        {"name": "Lionel Messi", "team": "Argentina", "team_abbr": "ARG", "position": "F",
+         "stats": {"Goals": 0.5, "Shots": 3.0, "Shots on Target": 1.2, "Assists": 0.5, "Cards": 0.1}},
+        {"name": "Kylian Mbappé", "team": "France", "team_abbr": "FRA", "position": "F",
+         "stats": {"Goals": 0.8, "Shots": 3.8, "Shots on Target": 1.6, "Assists": 0.3, "Cards": 0.1}},
+        {"name": "Erling Haaland", "team": "Norway", "team_abbr": "NOR", "position": "F",
+         "stats": {"Goals": 0.9, "Shots": 3.5, "Shots on Target": 1.7, "Assists": 0.2, "Cards": 0.15}},
+        {"name": "Vinícius Júnior", "team": "Brazil", "team_abbr": "BRA", "position": "F",
+         "stats": {"Goals": 0.55, "Shots": 3.2, "Shots on Target": 1.1, "Assists": 0.4, "Cards": 0.2}},
+        {"name": "Harry Kane", "team": "England", "team_abbr": "ENG", "position": "F",
+         "stats": {"Goals": 0.7, "Shots": 3.0, "Shots on Target": 1.4, "Assists": 0.3, "Cards": 0.15}},
+        {"name": "Cristiano Ronaldo", "team": "Portugal", "team_abbr": "POR", "position": "F",
+         "stats": {"Goals": 0.6, "Shots": 3.4, "Shots on Target": 1.3, "Assists": 0.2, "Cards": 0.1}},
+        {"name": "Julián Álvarez", "team": "Argentina", "team_abbr": "ARG", "position": "F",
+         "stats": {"Goals": 0.5, "Shots": 2.4, "Shots on Target": 1.0, "Assists": 0.3, "Cards": 0.15}},
+        {"name": "Lautaro Martínez", "team": "Argentina", "team_abbr": "ARG", "position": "F",
+         "stats": {"Goals": 0.5, "Shots": 2.6, "Shots on Target": 1.1, "Assists": 0.2, "Cards": 0.2}},
+        {"name": "Jude Bellingham", "team": "England", "team_abbr": "ENG", "position": "M",
+         "stats": {"Goals": 0.35, "Shots": 2.0, "Shots on Target": 0.8, "Assists": 0.35, "Cards": 0.25}},
+        {"name": "Pedri", "team": "Spain", "team_abbr": "ESP", "position": "M",
+         "stats": {"Goals": 0.15, "Shots": 1.2, "Shots on Target": 0.4, "Assists": 0.3, "Cards": 0.2}},
+        {"name": "Christian Pulisic", "team": "United States", "team_abbr": "USA", "position": "F",
+         "stats": {"Goals": 0.4, "Shots": 2.2, "Shots on Target": 0.9, "Assists": 0.3, "Cards": 0.15}},
+        {"name": "Virgil van Dijk", "team": "Netherlands", "team_abbr": "NED", "position": "D",
+         "stats": {"Goals": 0.1, "Shots": 0.6, "Shots on Target": 0.25, "Assists": 0.05, "Cards": 0.25}},
+    ],
 }
 
 # Realistic injury pools per sport (player, team_abbr, position, status, injury).
@@ -258,5 +296,15 @@ INJURIES = {
         ("Otega Oweh", "UK", "G", "Day-To-Day", "Foot"),
         ("Vladislav Goldin", "MICH", "C", "Probable", "Knee"),
         ("JT Toppin", "TTU", "F", "Day-To-Day", "Shoulder"),
+    ],
+    "soccer_fifa_world_cup": [
+        ("Gavi", "ESP", "M", "Out", "Knee (ACL recovery)"),
+        ("Vinícius Júnior", "BRA", "F", "Questionable", "Hamstring"),
+        ("Pedri", "ESP", "M", "Day-To-Day", "Knock"),
+        ("Harry Kane", "ENG", "F", "Probable", "Ankle"),
+        ("Virgil van Dijk", "NED", "D", "Day-To-Day", "Calf"),
+        ("Christian Pulisic", "USA", "F", "Questionable", "Hamstring tightness"),
+        ("Cristiano Ronaldo", "POR", "F", "Probable", "Match fitness"),
+        ("Kylian Mbappé", "FRA", "F", "Probable", "Ankle"),
     ],
 }

@@ -1,10 +1,12 @@
 # Squeeze the Line
 
-Player-prop projections, slates, and injury reports across MLB, NFL, NCAA
-football, NBA, WNBA, and NCAA basketball. Odds come from
+Player-prop projections, slates, and injury reports across the FIFA World Cup,
+MLB, NFL, NCAA football, NBA, WNBA, and NCAA basketball. Odds come from
 [The Odds API](https://the-odds-api.com); season stats, positions, defense, and
 injuries are scraped from public sources and run through a sport-aware
-projection engine.
+projection engine. Soccer adds a bespoke Poisson model (`soccer_model.py`) for
+its low-scoring, position-driven counting stats — see the World Cup section
+below.
 
 ## Architecture
 
@@ -35,6 +37,59 @@ squeezetheline/
 > be deployed from the **repo root**, not from `backend/` — the start command
 > loads the app via `--app-dir backend`. Deploying `backend/` alone makes the
 > live provider fall back to mock data.
+
+## FIFA World Cup 2026
+
+Soccer is wired as a first-class sport (`soccer_fifa_world_cup`) alongside the US
+leagues, but the data flow and model differ — see `soccer_model.py` and
+`scrapers/soccer.py` for the full rationale.
+
+**Odds (The Odds API, key `soccer_fifa_world_cup`).** Supported player-prop
+markets and how they map onto the projection pipeline:
+
+| Market (Odds API key)            | Shown as            | Supported | How it's modeled |
+|----------------------------------|---------------------|-----------|------------------|
+| `player_goal_scorer_anytime`     | Anytime Goalscorer  | ✅ full   | Yes/No → Over-0.5 goals; `P=1-e^(-λ)` |
+| `player_shots`                   | Shots               | ✅ full   | over/under, Poisson |
+| `player_shots_on_target`         | Shots on Target     | ✅ full   | over/under, Poisson |
+| `player_assists`                 | Assists             | ✅ full   | over/under, Poisson |
+| `player_to_receive_card`         | To Receive a Card   | ✅ full   | Yes/No → Over-0.5 cards |
+| `player_first_goal_scorer` / `player_last_goal_scorer` | — | ❌ unsupported | goal *ordering*, not groundable in per-player rates |
+| `player_to_receive_red_card`     | —                   | ❌ unsupported | too rare/noisy to model |
+
+The Yes/No markets carry no numeric line, so the odds layer rewrites them to a
+synthetic Over-0.5 line on the matching stat (scoring ≥1 goal == anytime
+goalscorer). They're treated as plus-money "does it happen" bets: only the Yes
+side is surfaced, and only for credible scorers/booking candidates.
+
+**Cost / tier note.** World Cup player props are returned on the project's
+current Odds API plan (a 20,000-credit tier — verified live: a request for the
+day's match returned the props with ~19.9k credits remaining). Props are billed
+per event at `markets × regions` credits, so a full slate day costs roughly
+`(# matches) × 5` credits. The free 500-credit tier would not sustain a full
+tournament; the current plan comfortably does.
+
+**Player stats (ESPN, free).** ESPN has no league-wide soccer game-log endpoint,
+so each player's recent **club** match form (goals, shots, shots on target,
+assists, cards) comes from the athlete *overview* feed (last ~5 matches). Recent
+club form is the best public per-player signal for an international tournament,
+where national-team samples are tiny. ESPN soccer injuries
+(`soccer/fifa.world/injuries`) and national-team logos (ESPN "countries" set)
+are also wired.
+
+**Projection model (`soccer_model.py`).** A bespoke Poisson engine, because
+soccer counting stats are low and Poisson-distributed: it shrinks the (small)
+recent sample toward a position prior (forwards score ~9× defenders), scales
+scoring by a documented national-team opponent-strength factor, and reads prop
+probabilities straight off the Poisson.
+
+**Known limitations (graceful, documented).** Slate depth tracks what the book
+posts — many group-stage matches list only the goalscorer market. Per-match
+*minutes* aren't in the ESPN feed, so a start ≈ 90′ / sub ≈ 30′ is estimated.
+Player headshots aren't available for soccer (logos are). Odds-API↔ESPN name
+differences (e.g. "Heung-Min Son" vs "Son Heung-Min") are reconciled by
+exact token-set identity in the backend live provider; the legacy Streamlit
+`app.py` path doesn't yet apply that reconciliation.
 
 ## Running locally
 

@@ -8,7 +8,7 @@ import { ParlaySlip } from "@/components/ParlaySlip";
 export const metadata: Metadata = {
   title: "Squeeze the Line — Player Prop Projections",
   description:
-    "Daily player-prop projections, confidence-scored picks, trends and injury reports across MLB, WNBA, NFL and college.",
+    "Daily player-prop projections, confidence-scored picks, trends and injury reports across the FIFA World Cup, MLB, WNBA, NFL and college.",
 };
 
 export default function RootLayout({

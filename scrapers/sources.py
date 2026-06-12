@@ -43,6 +43,7 @@ _ESPN_MODULE_BY_KEY = {
     "baseball_mlb": "scrapers.mlb",
     "americanfootball_nfl": "scrapers.nfl",
     "americanfootball_ncaaf": "scrapers.ncaaf",
+    "soccer_fifa_world_cup": "scrapers.soccer",
 }
 
 

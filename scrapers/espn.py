@@ -43,6 +43,9 @@ ESPN_SPORT_BY_LEAGUE = {
     "nfl": "football",
     "college-football": "football",
     "mlb": "baseball",
+    # Soccer leagues use a dotted slug (e.g. "fifa.world" for the World Cup,
+    # "eng.1" for the Premier League). Only the World Cup is wired today.
+    "fifa.world": "soccer",
 }
 
 
@@ -72,13 +75,16 @@ POSITION_MAP = {
 # are kept as ESPN's own abbreviations (display only). A blank/unknown position
 # falls back to a sport-appropriate default so data.prepare_stats (which drops
 # rows with a missing position) keeps every player who recorded stats.
-_DEFAULT_POSITION = {"basketball": "SF", "baseball": "DH", "football": "ATH"}
+_DEFAULT_POSITION = {"basketball": "SF", "baseball": "DH", "football": "ATH",
+                     "soccer": "M"}
 
 
 def _map_position(sport: str, abbr: str) -> str:
     """Normalize a roster position abbreviation for the given ESPN sport."""
     if sport == "basketball":
         return POSITION_MAP.get(abbr, "SF")
+    # Soccer rosters report G/D/M/F (goalkeeper/defender/midfielder/forward),
+    # which the soccer model keys off directly, so pass them through.
     return abbr or _DEFAULT_POSITION.get(sport, "ATH")
 
 # Match injuries.py so statuses render consistently across sources.
@@ -190,6 +196,50 @@ def _iter_roster_athletes(athletes):
 
 def _norm(s: str) -> str:
     return unidecode(str(s or "")).lower().strip()
+
+
+# Name suffixes that shouldn't affect identity matching.
+_NAME_NOISE_TOKENS = {"jr", "sr", "ii", "iii", "iv", "de", "da", "do", "dos", "del"}
+
+
+def name_tokens(s: str) -> frozenset:
+    """Order-independent identity key for a player name.
+
+    Returns the set of significant lowercased/unidecoded word tokens, dropping
+    common noise (suffixes, particles). Two names match iff their token sets are
+    equal — which reconciles the *order* differences between sources without any
+    fuzzy matching: the Odds API's "Heung-Min Son" and ESPN's "Son Heung-Min"
+    both reduce to {heung, min, son}. Exact-set equality keeps this safe (no
+    accidental joins) while fixing the common reversed-name case that matters a
+    lot for a World Cup of non-Western names.
+    """
+    raw = unidecode(str(s or "")).lower()
+    toks = [t for t in "".join(c if c.isalnum() else " " for c in raw).split() if t]
+    sig = [t for t in toks if t not in _NAME_NOISE_TOKENS]
+    return frozenset(sig or toks)
+
+
+def match_names_by_tokens(source_names, target_names) -> dict:
+    """Map each source name to a target name with the same token set.
+
+    Used to reconcile Odds-API player names to ESPN roster names for soccer.
+    Returns {source_name: target_name} only for names that match exactly (by
+    normalized string) or by token set; unmatched names are omitted so callers
+    fall back gracefully (no projection rather than a wrong join).
+    """
+    target_by_norm = {_norm(t): t for t in target_names}
+    target_by_tokens = {}
+    for t in target_names:
+        target_by_tokens.setdefault(name_tokens(t), t)
+    out = {}
+    for s in source_names:
+        if _norm(s) in target_by_norm:
+            out[s] = target_by_norm[_norm(s)]
+            continue
+        hit = target_by_tokens.get(name_tokens(s))
+        if hit is not None:
+            out[s] = hit
+    return out
 
 
 def _slate_teams(league: str, team_codes, session: requests.Session) -> list[dict]:
@@ -378,10 +428,61 @@ def _parse_football(stats: list, names: list) -> dict:
     }
 
 
+def _soccer_minutes(appearances_raw) -> tuple[float, int]:
+    """Turn the soccer gamelog 'appearances' cell into (minutes, started).
+
+    ESPN's per-match appearances cell is a label, not a number: "Started" for a
+    starter, "Sub" (or a substitution minute) for a substitute, and "--"/""/
+    "DNP" when the player didn't feature. ESPN soccer game logs don't expose
+    minutes played, so we estimate: a start ≈ 90 minutes, a substitute appearance
+    ≈ 30, and a non-appearance 0. The estimate only drives the DNP filter and the
+    per-minute rate column; the projection model works off per-match counts, not
+    minutes, so the approximation is low-stakes. Returns (minutes, started_flag).
+    """
+    s = str(appearances_raw or "").strip().lower()
+    if not s or s in ("--", "-", "dnp", "0"):
+        return 0.0, 0
+    if s.startswith("start"):
+        return 90.0, 1
+    # "sub", "subbed", or a numeric minute like "63'" → treat as a sub appearance.
+    return 30.0, 0
+
+
+def _parse_soccer(stats: list, names: list) -> dict:
+    """Parse one soccer match's stat line (gamelog 'statistics' names/values).
+
+    Expected names: appearances, totalGoals, goalAssists, totalShots,
+    shotsOnTarget, foulsCommitted, foulsSuffered, offsides, yellowCards,
+    redCards. 'cards' is the combined yellow+red count (the prop is "to receive
+    a card" of either colour).
+    """
+    appearances = ""
+    try:
+        appearances = stats[names.index("appearances")]
+    except (ValueError, IndexError):
+        appearances = "Started" if stats else ""
+    minutes, started = _soccer_minutes(appearances)
+    yellow = _stat_value(stats, names, "yellowCards")
+    red = _stat_value(stats, names, "redCards")
+    return {
+        "minutes": minutes,
+        "started": float(started),
+        "goals": _stat_value(stats, names, "totalGoals"),
+        "assists": _stat_value(stats, names, "goalAssists"),
+        "shots": _stat_value(stats, names, "totalShots"),
+        "shots_on_target": _stat_value(stats, names, "shotsOnTarget"),
+        "fouls": _stat_value(stats, names, "foulsCommitted"),
+        "yellow_cards": yellow,
+        "red_cards": red,
+        "cards": yellow + red,
+    }
+
+
 _EVENT_PARSER = {
     "basketball": _parse_basketball,
     "baseball": _parse_baseball,
     "football": _parse_football,
+    "soccer": _parse_soccer,
 }
 
 # Stat columns (besides the meta columns) each sport's parser emits — used to
@@ -393,7 +494,61 @@ _SPORT_STAT_COLUMNS = {
     "football": ["minutes", "pass_yards", "pass_tds", "completions", "pass_attempts",
                  "interceptions", "rush_yards", "rush_attempts", "rush_tds",
                  "receptions", "receiving_yards", "receiving_tds"],
+    "soccer": ["minutes", "started", "goals", "assists", "shots",
+               "shots_on_target", "fouls", "yellow_cards", "red_cards", "cards"],
 }
+
+
+def get_soccer_gamelog(league: str, athlete_id: str,
+                       session: Optional[requests.Session] = None) -> list[dict]:
+    """Fetch one soccer player's recent match log via the athlete overview feed.
+
+    Soccer has no league-wide game-log endpoint and the generic
+    /athletes/{id}/gamelog 404s for soccer, so we read the player's "overview",
+    whose ``gameLog`` node carries the most recent ~5 *club* matches with
+    per-match counting stats (goals, shots, shots on target, assists, cards).
+    Recent club form is the best public per-player rate signal for an
+    international tournament, where national-team samples are tiny — this is a
+    deliberate, documented approximation (the player's club, not country, is the
+    opponent in these rows; the World Cup opponent adjustment is applied later by
+    soccer_model).
+
+    Returns rows with gameday, opponent, minutes and the soccer stat columns
+    (see _SPORT_STAT_COLUMNS["soccer"]). Empty list on any failure.
+    """
+    sess = session or _session()
+    url = f"{_web_api(league)}/athletes/{athlete_id}/overview"
+    try:
+        resp = sess.get(url, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return []
+
+    gamelog = data.get("gameLog") or {}
+    stat_blocks = gamelog.get("statistics") or []
+    if not stat_blocks:
+        return []
+    block = stat_blocks[0]
+    names = block.get("names") or []
+    if not names:
+        return []
+    meta = gamelog.get("events") or {}
+
+    out = []
+    for ev in block.get("events", []) or []:
+        eid = ev.get("eventId")
+        stats = ev.get("stats")
+        if not eid or not stats:
+            continue
+        m = meta.get(eid, {})
+        row = {
+            "gameday": m.get("gameDate", ""),
+            "opponent": (m.get("opponent") or {}).get("abbreviation", ""),
+        }
+        row.update(_parse_soccer(stats, names))
+        out.append(row)
+    return out
 
 
 def get_player_gamelog(league: str, athlete_id: str, season: int,
@@ -404,6 +559,9 @@ def get_player_gamelog(league: str, athlete_id: str, season: int,
     (see _SPORT_STAT_COLUMNS). Player name/team are attached by the caller.
     """
     sess = session or _session()
+    if _sport_for(league) == "soccer":
+        # Soccer reads the overview feed (recent matches), not a season gamelog.
+        return get_soccer_gamelog(league, athlete_id, session=sess)
     parse = _EVENT_PARSER.get(_sport_for(league), _parse_basketball)
     url = f"{_web_api(league)}/athletes/{athlete_id}/gamelog"
     try:
@@ -465,10 +623,26 @@ def get_slate_stats(league: str, team_codes=None, player_names=None,
     sport = _sport_for(league)
     rmap = _roster_map(league, team_codes, sess)
 
-    wanted = {_norm(n) for n in player_names} if player_names else None
+    # Soccer: select roster players by token-set identity as well as exact name,
+    # so reversed/non-Western prop names ("Heung-Min Son") still resolve to the
+    # roster ("Son Heung-Min"). Rows are labeled with the ESPN roster name; the
+    # caller reconciles prop names to those via match_names_by_tokens.
+    if sport == "soccer" and player_names:
+        wanted_norm = {_norm(n) for n in player_names}
+        wanted_tokens = {name_tokens(n) for n in player_names}
+
+        def _is_wanted(meta) -> bool:
+            return (_norm(meta["name"]) in wanted_norm
+                    or name_tokens(meta["name"]) in wanted_tokens)
+    else:
+        wanted = {_norm(n) for n in player_names} if player_names else None
+
+        def _is_wanted(meta) -> bool:
+            return wanted is None or _norm(meta["name"]) in wanted
+
     rows = []
     for key, meta in rmap.items():
-        if wanted is not None and key not in wanted:
+        if not _is_wanted(meta):
             continue
         for g in get_player_gamelog(league, meta["player_id"], season, session=sess):
             rows.append({"name": meta["name"], "team-code": meta["team-code"], **g})
