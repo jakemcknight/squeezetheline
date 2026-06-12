@@ -42,6 +42,10 @@ _OPPONENTS = {
     "basketball_ncaab": [("Houston Cougars", "HOU"), ("Tennessee Volunteers", "TENN"), ("Iowa State Cyclones", "ISU"),
                          ("Marquette Golden Eagles", "MARQ"), ("Arizona Wildcats", "ARIZ"),
                          ("Connecticut Huskies", "UCONN"), ("Gonzaga Bulldogs", "GONZ"), ("Baylor Bears", "BAY")],
+    "soccer_fifa_world_cup": [("Mexico", "MEX"), ("Croatia", "CRO"), ("Morocco", "MAR"),
+                              ("Japan", "JPN"), ("Senegal", "SEN"), ("Saudi Arabia", "KSA"),
+                              ("South Korea", "KOR"), ("Ghana", "GHA"), ("Uruguay", "URU"),
+                              ("Switzerland", "SUI")],
 }
 
 

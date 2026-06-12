@@ -1,0 +1,48 @@
+{
+  "_comment": "Trimmed copy of a real ESPN soccer athlete /overview payload (soccer/fifa.world), mirroring the exact gameLog shape verified against the live endpoint. Used by test_soccer_scraper.py to test the parser without a network call. The 'appearances' cell is a label (Started/Sub/--), not a number; numeric stats follow the 'names' order.",
+  "gameLog": {
+    "displayName": "Game Log",
+    "statistics": [
+      {
+        "labels": ["APP", "G", "A", "SHOT", "SOG", "FC", "FA", "OF", "YC", "RC"],
+        "names": ["appearances", "totalGoals", "goalAssists", "totalShots", "shotsOnTarget", "foulsCommitted", "foulsSuffered", "offsides", "yellowCards", "redCards"],
+        "events": [
+          {"eventId": "401111001", "stats": ["Started", "2", "1", "6", "3", "1", "4", "0", "0", "0"]},
+          {"eventId": "401111002", "stats": ["Started", "0", "1", "3", "0", "0", "1", "0", "1", "0"]},
+          {"eventId": "401111003", "stats": ["Sub", "1", "0", "1", "1", "0", "0", "0", "0", "0"]},
+          {"eventId": "401111004", "stats": ["--", "0", "0", "0", "0", "0", "0", "0", "0", "0"]}
+        ]
+      }
+    ],
+    "events": {
+      "401111001": {
+        "id": "401111001",
+        "gameDate": "2026-05-13T23:30:00.000+00:00",
+        "atVs": "vs",
+        "opponent": {"id": "83", "displayName": "Barcelona", "abbreviation": "BAR"},
+        "gameResult": "W"
+      },
+      "401111002": {
+        "id": "401111002",
+        "gameDate": "2026-05-09T17:00:00.000+00:00",
+        "atVs": "@",
+        "opponent": {"id": "86", "displayName": "Real Madrid", "abbreviation": "RMA"},
+        "gameResult": "D"
+      },
+      "401111003": {
+        "id": "401111003",
+        "gameDate": "2026-05-02T19:00:00.000+00:00",
+        "atVs": "vs",
+        "opponent": {"id": "243", "displayName": "Sevilla", "abbreviation": "SEV"},
+        "gameResult": "W"
+      },
+      "401111004": {
+        "id": "401111004",
+        "gameDate": "2026-04-26T19:00:00.000+00:00",
+        "atVs": "@",
+        "opponent": {"id": "85", "displayName": "Valencia", "abbreviation": "VAL"},
+        "gameResult": "L"
+      }
+    }
+  }
+}

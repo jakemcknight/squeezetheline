@@ -159,6 +159,35 @@ SPORTS = {
             "Receptions", "Receiving Yards",
         ],
     },
+    "FIFA World Cup": {
+        "key": "soccer_fifa_world_cup",
+        "active": True,
+        # Full projections via ESPN's free soccer endpoints. Unlike the other
+        # ESPN-backed sports, soccer has no league-wide per-game-log endpoint;
+        # each player's recent *club* match form (goals, shots, shots on target,
+        # assists, cards) comes from the athlete "overview" feed, which the
+        # soccer scraper turns into per-match rate rows (see scrapers/soccer.py
+        # and scrapers/espn.py:_parse_soccer). Projections use a Poisson model
+        # (soccer_model.py) rather than the linear blend the US sports use,
+        # because soccer counting stats are low and Poisson-distributed.
+        #
+        # Market shapes differ from the US sports: shots / shots on target /
+        # assists are true over/under lines, while "anytime goalscorer" and
+        # "to receive a card" are Yes/No markets that the odds layer maps onto a
+        # synthetic over-0.5 line on the goals / cards stat (Over 0.5 goals ==
+        # scores == anytime goalscorer). See scrapers/odds_api.SOCCER_YES_NO_MARKETS.
+        "projections": True,
+        "stats_source": "espn",
+        "espn_league": "fifa.world",
+        "ml_models": False,
+        "markets": [
+            "player_goal_scorer_anytime", "player_shots_on_target",
+            "player_shots", "player_assists", "player_to_receive_card",
+        ],
+        "stat_categories": [
+            "Goals", "Shots", "Shots on Target", "Assists", "Cards",
+        ],
+    },
 }
 
 DEFAULT_SPORT = "NBA"
@@ -227,6 +256,19 @@ SPORT_STAT_CONFIGS = {
         ("rush_attempts", "Rush Attempts", "Rush Att"),
         ("receptions", "Receptions", "Rec"),
         ("receiving_yards", "Receiving Yards", "Rec Yds"),
+    ],
+    # Soccer / World Cup. The prop_type strings must match scrapers/odds_api.
+    # MARKET_MAP: "Anytime Goalscorer" and "To Receive a Card" are Yes/No
+    # markets the odds layer rewrites to a synthetic Over-0.5 line on goals /
+    # cards; "Shots", "Shots on Target" and "Total Assists" are real lines.
+    # ("player_assists" reuses the existing "Total Assists" prop_type so it
+    # doesn't collide with basketball's mapping of the same Odds-API key.)
+    "soccer_fifa_world_cup": [
+        ("goals", "Anytime Goalscorer", "Goals"),
+        ("shots", "Shots", "Shots"),
+        ("shots_on_target", "Shots on Target", "SOT"),
+        ("assists", "Total Assists", "Assists"),
+        ("cards", "To Receive a Card", "Cards"),
     ],
 }
 
@@ -332,15 +374,21 @@ def team_logo_url(team_code: str, sport_key: str = "basketball_nba") -> str:
     """Return a team-logo URL for a team code, or '' if unknown.
 
     NBA logos come from cdn.nba.com (by numeric team id); other ESPN-backed
-    sports use ESPN's logo CDN (by lowercase abbreviation).
+    sports use ESPN's logo CDN (by lowercase abbreviation). Soccer national
+    teams live under ESPN's "countries" logo set, keyed by the same 3-letter
+    code (verified: .../teamlogos/countries/500/arg.png resolves).
     """
     if sport_key == "basketball_nba":
         team_id = NBA_TEAM_IDS.get(team_code)
         if not team_id:
             return ""
         return f"https://cdn.nba.com/logos/nba/{team_id}/global/L/logo.svg"
+    if not team_code:
+        return ""
+    if sport_key == "soccer_fifa_world_cup":
+        return f"https://a.espncdn.com/i/teamlogos/countries/500/{team_code.lower()}.png"
     league = ESPN_LEAGUE_BY_KEY.get(sport_key)
-    if not league or not team_code:
+    if not league:
         return ""
     return f"https://a.espncdn.com/i/teamlogos/{league}/500/{team_code.lower()}.png"
 
@@ -355,6 +403,11 @@ def player_photo_url(player_id: int | str, sport_key: str = "basketball_nba") ->
         return ""
     if sport_key == "basketball_nba":
         return f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
+    # ESPN doesn't publish soccer headshots by athlete id under a stable path
+    # (the /i/headshots/soccer/... assets 404 for most players), so we skip them
+    # and let the frontend fall back to initials. Logos still render.
+    if sport_key == "soccer_fifa_world_cup":
+        return ""
     league = ESPN_LEAGUE_BY_KEY.get(sport_key)
     if not league:
         return ""
@@ -497,6 +550,30 @@ NFL_TEAM_NAME_TO_CODE = {
     "Washington Commanders": "WSH",
 }
 
+# FIFA World Cup: The Odds API country name → ESPN national-team abbreviation.
+# Codes verified against ESPN's soccer/fifa.world teams endpoint for the full
+# expanded 48-team field. The Odds API names national teams by country, so this
+# is a country → code map. Common Odds-API naming variants (e.g. "USA",
+# "Turkey", "Korea Republic") are mapped to the same code as the canonical name
+# so odds-derived team codes line up with the ESPN stat/opponent codes.
+WORLD_CUP_TEAM_NAME_TO_CODE = {
+    "Algeria": "ALG", "Argentina": "ARG", "Australia": "AUS", "Austria": "AUT",
+    "Belgium": "BEL", "Bosnia-Herzegovina": "BIH", "Bosnia and Herzegovina": "BIH",
+    "Brazil": "BRA", "Canada": "CAN", "Cape Verde": "CPV", "Cabo Verde": "CPV",
+    "Colombia": "COL", "Congo DR": "COD", "DR Congo": "COD", "Croatia": "CRO",
+    "Curaçao": "CUW", "Curacao": "CUW", "Czechia": "CZE", "Czech Republic": "CZE",
+    "Ecuador": "ECU", "Egypt": "EGY", "England": "ENG", "France": "FRA",
+    "Germany": "GER", "Ghana": "GHA", "Haiti": "HAI", "Iran": "IRN",
+    "Iraq": "IRQ", "Ivory Coast": "CIV", "Côte d'Ivoire": "CIV", "Japan": "JPN",
+    "Jordan": "JOR", "Mexico": "MEX", "Morocco": "MAR", "Netherlands": "NED",
+    "New Zealand": "NZL", "Norway": "NOR", "Panama": "PAN", "Paraguay": "PAR",
+    "Portugal": "POR", "Qatar": "QAT", "Saudi Arabia": "KSA", "Scotland": "SCO",
+    "Senegal": "SEN", "South Africa": "RSA", "South Korea": "KOR",
+    "Korea Republic": "KOR", "Spain": "ESP", "Sweden": "SWE", "Switzerland": "SUI",
+    "Tunisia": "TUN", "Türkiye": "TUR", "Turkey": "TUR", "United States": "USA",
+    "USA": "USA", "Uruguay": "URU", "Uzbekistan": "UZB",
+}
+
 # The Odds API team-name → code map per sport key. Sports without a map (e.g.
 # NCAA, with hundreds of teams) fall back to passing the name through unchanged.
 TEAM_NAME_TO_CODE_BY_SPORT = {
@@ -504,6 +581,7 @@ TEAM_NAME_TO_CODE_BY_SPORT = {
     "basketball_wnba": WNBA_TEAM_NAME_TO_CODE,
     "baseball_mlb": MLB_TEAM_NAME_TO_CODE,
     "americanfootball_nfl": NFL_TEAM_NAME_TO_CODE,
+    "soccer_fifa_world_cup": WORLD_CUP_TEAM_NAME_TO_CODE,
     # americanfootball_ncaaf: no map (~130 FBS teams) → names pass through.
 }
 

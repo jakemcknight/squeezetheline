@@ -27,6 +27,12 @@ STAT_LABEL = {
     "threes": "3-Pointers Made",
     "steals": "Steals",
     "blocks": "Blocks",
+    # Soccer / World Cup. "goals" at a 0.5 line is the anytime-goalscorer market;
+    # "cards" at 0.5 is the to-receive-a-card market.
+    "goals": "Goals",
+    "shots": "Shots",
+    "shots_on_target": "Shots on Target",
+    "cards": "Cards (yellow or red)",
 }
 
 
@@ -176,9 +182,11 @@ def build_context_block(player: str, stat: str, summary: dict, result_row: Optio
 
 def analyze_prop(player: str, stat: str, line: float, side: str,
                  summary: dict, result_row: Optional[dict],
-                 model: str = DEFAULT_MODEL) -> dict:
+                 model: str = DEFAULT_MODEL, sport_label: str = "NBA") -> dict:
     """Send the prop + context to Claude and return its analysis.
 
+    ``sport_label`` (e.g. "NBA", "FIFA World Cup") tailors the prompt wording so
+    the same analyzer works as a match-preview/writeup tool across sports.
     Returns {'text': str, 'usage': {...}} on success, or {'error': str} on failure.
     """
     api_key = _get_api_key()
@@ -195,7 +203,7 @@ def analyze_prop(player: str, stat: str, line: float, side: str,
 
     context = build_context_block(player, stat, summary, result_row)
 
-    user_msg = f"""Evaluate this NBA player prop for me.
+    user_msg = f"""Evaluate this {sport_label} player prop for me.
 
 **Prop**: {player} {side_upper} {line:.1f} {stat_label}
 
@@ -218,8 +226,8 @@ Call out any red flags (injury, DNP, blowout risk) clearly.
 """
 
     system = (
-        "You are an expert NBA prop bettor. You analyze data cleanly, weigh "
-        "sample sizes properly, and deliver crisp, actionable verdicts with "
+        f"You are an expert {sport_label} prop bettor. You analyze data cleanly, "
+        "weigh sample sizes properly, and deliver crisp, actionable verdicts with "
         "clear reasoning. You are NOT giving financial advice — the user "
         "understands this is for entertainment."
     )

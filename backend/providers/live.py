@@ -43,6 +43,7 @@ from config import (  # noqa: E402
 )
 from data import prepare_stats, prepare_props  # noqa: E402
 from analysis import analyze_stat, build_player_summaries  # noqa: E402
+import soccer_model  # noqa: E402  (soccer Poisson projection model)
 from scrapers.odds_api import (  # noqa: E402
     get_all_props,
     get_events_for_date,
@@ -55,6 +56,7 @@ from scrapers.sources import (  # noqa: E402
     get_defense_by_position,
     get_injury_report,
 )
+from scrapers.espn import match_names_by_tokens  # noqa: E402
 
 from models import (  # noqa: E402  (backend's own models)
     GameLog,
@@ -76,7 +78,12 @@ _SPORT_META = {
     "baseball_mlb": ("Major League Baseball", "⚾", "in-season"),
     "americanfootball_nfl": ("National Football League", "\U0001f3c8", "offseason"),
     "americanfootball_ncaaf": ("NCAA Football", "\U0001f393", "offseason"),
+    "soccer_fifa_world_cup": ("FIFA World Cup 2026", "⚽", "in-season"),
 }
+
+# Sports that use the bespoke soccer projection model (Poisson + opponent +
+# position shrinkage) instead of the linear last-5/last-10/season blend.
+_SOCCER_KEY = "soccer_fifa_world_cup"
 
 # Reverse team-code -> full-name maps, derived from config's name->code maps,
 # so picks can show a readable team/opponent name. Sports with no map (NCAAF)
@@ -189,6 +196,20 @@ class LiveProvider(DataProvider):
         df = prepare_stats(stats, positions)
         has_stats = not df.empty
 
+        # Soccer: the Odds API and ESPN order/spell names differently (e.g.
+        # "Heung-Min Son" vs "Son Heung-Min"). Reconcile the prop player names to
+        # the ESPN roster names (which the stats + positions use) by token-set
+        # identity so the props join to projections. Unmatched names pass through
+        # and simply get no projection — graceful, never a wrong join.
+        if sport_key == _SOCCER_KEY and not raw_props.empty and not df.empty:
+            alias = match_names_by_tokens(
+                raw_props["player"].dropna().unique().tolist(),
+                df["name"].dropna().unique().tolist(),
+            )
+            if alias:
+                raw_props = raw_props.copy()
+                raw_props["player"] = raw_props["player"].map(lambda n: alias.get(n, n))
+
         props = prepare_props(raw_props.copy())
         defense = get_defense_by_position(sport_key)
         game_times = get_game_times(game_date, sport_key)
@@ -277,6 +298,9 @@ class LiveProvider(DataProvider):
 
     def _row_to_pick(self, sport_key: str, stat_key: str, label: str,
                      row: pd.Series, game_times: dict) -> Optional[Pick]:
+        if sport_key == _SOCCER_KEY:
+            return self._soccer_row_to_pick(sport_key, stat_key, label, row, game_times)
+
         line = row.get("spread")
         if not _isnum(line):
             return None
@@ -327,6 +351,84 @@ class LiveProvider(DataProvider):
             team_abbr=team_code,
             opponent=self._team_name(sport_key, opp_code),
             opponent_abbr=opp_code,
+            game_time=self._format_game_time(game_times.get(team_code)),
+            stat_type=label,
+            line=line,
+            projection=projection,
+            edge=edge,
+            confidence=confidence,
+            hit_rate_l10=hr_l10,
+            hit_rate_season=hr_season,
+            trend=trend,
+            trend_pct=trend_pct,
+            recommendation=self._recommend(side, confidence, edge),
+        )
+
+    def _soccer_row_to_pick(self, sport_key: str, stat_key: str, label: str,
+                            row: pd.Series, game_times: dict) -> Optional[Pick]:
+        """Build a soccer pick via the Poisson model (soccer_model.py).
+
+        Unlike the linear-blend path, the projection is an opponent-adjusted,
+        position-shrunk per-match expectation, and the season hit rate we report
+        is the model's P(over the line) (e.g. the anytime-goalscorer probability
+        for the synthetic 0.5 goals line), not a raw historical frequency.
+        """
+        line = row.get("spread")
+        if not _isnum(line):
+            return None
+        line = float(line)
+
+        # Empirical per-match rate: prefer recent form (last 5), fall back to the
+        # full fetched sample. last10 holds the player's recent club-match values.
+        last10 = row.get("last10")
+        sample = [float(v) for v in last10 if _isnum(v)] if isinstance(last10, (list, tuple)) else []
+        n_games = len(sample)
+        l5 = row.get(f"{stat_key}_5g")
+        season = row.get(stat_key)
+        empirical_rate = _f(l5) if _isnum(l5) else _f(season)
+
+        position = str(row.get("position", "") or "")
+        opponent = str(row.get("opponent", "") or "")
+
+        # goals / cards are Yes/No markets rewritten to an Over-0.5 line. Treat
+        # them as plus-money "does it happen" bets (always the Yes/Over side,
+        # confidence rising with the probability) and drop players who aren't
+        # credible scorers/booking candidates, rather than showing a dead "under".
+        is_yesno = stat_key in ("goals", "cards")
+        proj = soccer_model.project_prop(
+            stat=stat_key, line=line, empirical_rate=empirical_rate,
+            n_games=n_games, position=position, opponent_code=opponent,
+            yes_no=is_yesno,
+        )
+        if not proj["actionable"]:
+            return None
+
+        side = proj["side"]
+        projection = round(proj["lam"], 2)
+        edge = round(proj["edge"], 2)
+        confidence = max(0, min(100, int(proj["confidence"])))
+        p_over = float(proj["p_over"])
+
+        # Recent empirical clearance of the line (share of club matches over it).
+        hr_l10 = round(sum(1 for v in sample if v > line) / n_games, 2) if n_games else round(p_over, 2)
+        hr_season = round(p_over, 2)  # the model's projected probability
+
+        trend_arrow = str(row.get("trend", ""))
+        trend = "up" if trend_arrow == "↑" else ("down" if trend_arrow == "↓" else "flat")
+        trend_pct = 0.0
+        if _isnum(l5) and _isnum(row.get(f"{stat_key}_10g")) and float(row.get(f"{stat_key}_10g")) != 0:
+            trend_pct = round((float(l5) - float(row.get(f"{stat_key}_10g"))) / float(row.get(f"{stat_key}_10g")) * 100, 1)
+
+        team_code = str(row.get("team-code", "") or "")
+        name = str(row.get("name", ""))
+
+        return Pick(
+            id=f"{sport_key}:{name}".replace(" ", "_"),
+            player=name,
+            team=self._team_name(sport_key, team_code),
+            team_abbr=team_code,
+            opponent=self._team_name(sport_key, opponent),
+            opponent_abbr=opponent,
             game_time=self._format_game_time(game_times.get(team_code)),
             stat_type=label,
             line=line,
