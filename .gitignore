@@ -38,3 +38,5 @@ data/picks.json
 # OS
 .DS_Store
 Thumbs.db
+nrfi/cache/
+nrfi/out/
