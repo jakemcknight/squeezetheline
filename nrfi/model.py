@@ -33,8 +33,8 @@ v1 limitations / improvement path (documented, not built):
   * No park factors or weather. Park could be added by scaling L per venue.
   * Pitcher rate ignores which bullpen-game "opener" pitched the 1st on
     teams that use openers; gamesStarted==1 is taken at face value.
-  * A market-edge layer (compare P(YRFI) to sportsbook NRFI/YRFI prices)
-    can consume BoardRow as-is.
+  * Market-edge layer lives in odds.py (The Odds API totals_1st_1_innings,
+    de-vig + EV + fractional Kelly) and attaches to BoardRow.market.
 """
 from __future__ import annotations
 
@@ -80,6 +80,7 @@ class BoardRow:
     confidence: str
     status: str
     detail: Dict[str, float] = field(default_factory=dict)
+    market: Optional[object] = None  # odds.MarketEdge when a line was found
 
     @property
     def p_nrfi(self) -> float:
