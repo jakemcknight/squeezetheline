@@ -40,3 +40,5 @@ data/picks.json
 Thumbs.db
 nrfi/cache/
 nrfi/out/
+cfb/cache/
+cfb/out/
