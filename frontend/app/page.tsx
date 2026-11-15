@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { api, API_BASE, type Pick, type Sport } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
@@ -10,14 +10,29 @@ import { SkeletonCard } from "@/components/SkeletonCard";
 import { SkeletonTable } from "@/components/SkeletonTable";
 import { pct, signed, confidenceTier } from "@/lib/format";
 
-const DEFAULT_DATE = "2026-05-31";
+// Today's slate date (YYYY-MM-DD) in US Eastern, the timezone game dates are
+// keyed on. Computed on the client after mount so the statically prerendered
+// page never bakes in a build-time date.
+function todayET(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
 
 export default function Dashboard() {
   const sportsState = useApi<Sport[]>(() => api.sports(), []);
   const [sport, setSport] = useState("baseball_mlb");
-  const [date, setDate] = useState(DEFAULT_DATE);
+  const [date, setDate] = useState("");
+  useEffect(() => setDate(todayET()), []);
 
-  const slateState = useApi(() => api.slate(sport, date), [sport, date]);
+  // Hold in the loading state until the client has resolved today's date.
+  const slateState = useApi(
+    () => (date ? api.slate(sport, date) : new Promise<never>(() => {})),
+    [sport, date]
+  );
 
   const sports = sportsState.data ?? [];
   const picks = slateState.data?.picks ?? [];
