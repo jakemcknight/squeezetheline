@@ -97,6 +97,11 @@ class Slate(BaseModel):
     date: str
     generated_at: str
     picks: List[Pick]
+    # "ok" — picks are current; "pending" — upstream data is still being
+    # fetched in the background (retry shortly); "unavailable" — the upstream
+    # fetch failed. Non-"ok" slates have no picks and a human-readable message.
+    status: str = "ok"
+    message: Optional[str] = None
 
 
 # --- User-specific models (require auth) ------------------------------------

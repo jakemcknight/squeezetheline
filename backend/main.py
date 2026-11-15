@@ -10,8 +10,13 @@ Run locally:
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import List, Optional
+
+# Surface provider diagnostics (pipeline timings, upstream failures) in the
+# Render logs; uvicorn only configures its own loggers.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 # Load backend/.env (e.g. ODDS_API_KEY) before the providers package decides
 # between the live and mock data sources. No-op if python-dotenv isn't present.
@@ -61,6 +66,14 @@ app.add_middleware(
 )
 
 provider = get_provider()
+
+# Pre-fill the live cache in the background so the first visitor after a
+# deploy/restart doesn't land on a cold, still-loading slate.
+if hasattr(provider, "warm"):
+    try:
+        provider.warm([s.key for s in provider.list_sports() if s.active and s.season == "in-season"])
+    except Exception as exc:  # never block startup on warm-up
+        logging.getLogger(__name__).warning("cache warm-up skipped: %r", exc)
 
 # User-specific, auth-protected routes (/api/picks/*, /api/alerts). The public
 # projection routes above stay open; these short-circuit with 503 when Supabase

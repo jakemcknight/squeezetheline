@@ -8,7 +8,7 @@ from config import SEASON_YEAR
 def get_player_positions() -> pd.DataFrame:
     """Scrape player position data from Basketball Reference play-by-play page."""
     url = f"https://www.basketball-reference.com/leagues/NBA_{SEASON_YEAR}_play-by-play.html"
-    response = requests.get(url)
+    response = requests.get(url, timeout=(5, 20))
     soup = BeautifulSoup(response.text, "lxml")
     table = soup.find_all("table", id="pbp_stats")
     rows = table[0].find_all("tr")
@@ -39,7 +39,7 @@ def get_defense_by_position(sport_key: str = "basketball_nba") -> pd.DataFrame:
     """
     if sport_key != "basketball_nba":
         return pd.DataFrame(columns=DEFENSE_COLUMNS)
-    response = requests.get("https://hashtagbasketball.com/nba-defense-vs-position")
+    response = requests.get("https://hashtagbasketball.com/nba-defense-vs-position", timeout=(5, 20))
     soup = BeautifulSoup(response.text, "lxml")
     table = soup.find_all(
         "table", class_="table table-sm table-bordered table-striped table--statistics"

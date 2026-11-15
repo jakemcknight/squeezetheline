@@ -111,6 +111,10 @@ ALT_MARKET_MAP = {
 # once (each costs credits and most won't exist for a given event).
 MARKETS = markets_for(DEFAULT_SPORT)
 
+# (connect, read) timeout for every Odds API call. Without one, a stalled
+# upstream socket blocks the caller forever (requests' default is no timeout).
+ODDS_API_TIMEOUT = (5, 20)
+
 # Timezone for determining game dates (NBA schedule uses Eastern)
 EASTERN = ZoneInfo("America/New_York")
 
@@ -128,7 +132,7 @@ def get_events(sport_key: str = "basketball_nba") -> list[dict]:
     Returns a list of dicts with keys: id, home_team, away_team, commence_time.
     """
     url = f"{ODDS_API_BASE}/sports/{sport_key}/events"
-    resp = requests.get(url, params={"apiKey": get_odds_api_key()})
+    resp = requests.get(url, params={"apiKey": get_odds_api_key()}, timeout=ODDS_API_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
@@ -169,7 +173,7 @@ def get_event_alt_props(event_id: str, player: str, stat_market: str,
             "regions": "us",
             "markets": stat_market,
             "oddsFormat": "american",
-        }, timeout=15)
+        }, timeout=ODDS_API_TIMEOUT)
         if resp.status_code != 200:
             return []
         data = resp.json()
@@ -229,7 +233,7 @@ def get_event_props(event_id: str, all_books: bool = False,
         "regions": "us",
         "markets": markets_for(sport_key),
         "oddsFormat": "american",
-    })
+    }, timeout=ODDS_API_TIMEOUT)
 
     # Surface remaining quota for diagnostics
     remaining = resp.headers.get("x-requests-remaining")

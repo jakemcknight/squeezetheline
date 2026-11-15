@@ -18,8 +18,13 @@ the backend directory is already first on the path.
 from __future__ import annotations
 
 import datetime
+import logging
+import os
 import sys
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -95,6 +100,17 @@ _CODE_TO_NAME_BY_SPORT: Dict[str, Dict[str, str]] = {
 
 _CACHE_TTL_SECONDS = 300
 
+# Hard ceiling on how long a request waits for the scraping pipeline. The
+# pipeline hits several slow third-party sources (NBA.com via nba_api, ESPN
+# per-player game logs, the Odds API); any of them can stall for minutes from a
+# cloud IP. Past this deadline the request returns immediately (stale cached
+# data if we have it, else an empty "pending" slate) while the pipeline keeps
+# running in the background and fills the cache for the next request.
+_SLATE_DEADLINE_SECONDS = float(os.environ.get("SLATE_DEADLINE_SECONDS", "20"))
+_PIPELINE_WORKERS = 8
+
+log = logging.getLogger("squeezetheline.live")
+
 
 def _isnum(v) -> bool:
     return v is not None and not pd.isna(v)
@@ -107,9 +123,20 @@ def _f(v, default: float = 0.0) -> float:
 class LiveProvider(DataProvider):
     """Scraper-backed implementation of :class:`DataProvider`."""
 
-    def __init__(self) -> None:
+    def __init__(self, deadline_seconds: Optional[float] = None) -> None:
         # (sport_key, iso_date) -> (fetched_at_monotonic, payload)
         self._cache: Dict[Tuple[str, str], Tuple[float, dict]] = {}
+        # Single-flight: at most one pipeline run per (sport, date) at a time, so
+        # concurrent/retried requests share one upstream fetch instead of piling
+        # up blocked threads.
+        self._inflight: Dict[Tuple[str, str], Future] = {}
+        self._lock = threading.Lock()
+        self._executor = ThreadPoolExecutor(
+            max_workers=_PIPELINE_WORKERS, thread_name_prefix="slate-pipeline",
+        )
+        self._deadline = (
+            _SLATE_DEADLINE_SECONDS if deadline_seconds is None else deadline_seconds
+        )
 
     # ------------------------------------------------------------------ sports
     def list_sports(self) -> List[Sport]:
@@ -165,20 +192,71 @@ class LiveProvider(DataProvider):
 
     # ------------------------------------------------------------------ fetch
     def _fetch(self, sport_key: str, game_date: datetime.date) -> dict:
-        """Run the full pipeline for a sport/date, with a short-lived cache.
+        """Return the pipeline payload for a sport/date, bounded by a deadline.
 
-        Returns a payload dict: ``results`` (stat_key -> analysis DataFrame),
+        Fresh cache hits return immediately. Otherwise a (shared) background
+        pipeline run is started and awaited for at most ``self._deadline``
+        seconds. On timeout, stale cached data is returned if present; if not,
+        :class:`TimeoutError` is raised so the caller can serve a "pending"
+        state. Pipeline exceptions propagate (stale data is preferred if any).
+
+        Payload keys: ``results`` (stat_key -> analysis DataFrame),
         ``summaries`` (player name -> summary dict), ``game_times`` (team code
         -> ISO commence time) and ``generated_at``.
         """
         cache_key = (sport_key, game_date.isoformat())
-        hit = self._cache.get(cache_key)
-        if hit and (time.monotonic() - hit[0]) < _CACHE_TTL_SECONDS:
-            return hit[1]
+        with self._lock:
+            hit = self._cache.get(cache_key)
+            if hit and (time.monotonic() - hit[0]) < _CACHE_TTL_SECONDS:
+                return hit[1]
+            future = self._inflight.get(cache_key)
+            if future is None:
+                future = self._executor.submit(
+                    self._run_and_cache, cache_key, sport_key, game_date,
+                )
+                self._inflight[cache_key] = future
 
-        payload = self._run_pipeline(sport_key, game_date)
-        self._cache[cache_key] = (time.monotonic(), payload)
-        return payload
+        try:
+            return future.result(timeout=self._deadline)
+        except FutureTimeout:
+            log.warning(
+                "pipeline for %s %s exceeded %.0fs deadline; still running in background",
+                sport_key, cache_key[1], self._deadline,
+            )
+            if hit:
+                return hit[1]
+            raise TimeoutError(f"pipeline exceeded {self._deadline:.0f}s deadline")
+        except Exception:
+            if hit:
+                log.exception("pipeline for %s %s failed; serving stale data", *cache_key)
+                return hit[1]
+            raise
+
+    def _run_and_cache(self, cache_key: Tuple[str, str], sport_key: str,
+                       game_date: datetime.date) -> dict:
+        started = time.monotonic()
+        try:
+            payload = self._run_pipeline(sport_key, game_date)
+            with self._lock:
+                self._cache[cache_key] = (time.monotonic(), payload)
+            log.info("pipeline for %s %s finished in %.1fs",
+                     sport_key, cache_key[1], time.monotonic() - started)
+            return payload
+        finally:
+            with self._lock:
+                self._inflight.pop(cache_key, None)
+
+    def warm(self, sport_keys: List[str]) -> None:
+        """Start background pipeline runs (non-blocking) to pre-fill the cache."""
+        today = datetime.date.today()
+        for key in sport_keys:
+            cache_key = (key, today.isoformat())
+            with self._lock:
+                if cache_key in self._inflight or cache_key in self._cache:
+                    continue
+                self._inflight[cache_key] = self._executor.submit(
+                    self._run_and_cache, cache_key, key, today,
+                )
 
     def _run_pipeline(self, sport_key: str, game_date: datetime.date) -> dict:
         """Replicate app.fetch_fresh_data without the Streamlit UI layer."""
@@ -263,11 +341,20 @@ class LiveProvider(DataProvider):
     def get_slate(self, sport: str, date: Optional[str] = None) -> Slate:
         game_date = self._parse_date(date)
         day = game_date.isoformat()
+        now = datetime.datetime.now().isoformat(timespec="seconds")
         try:
             payload = self._fetch(sport, game_date)
+        except TimeoutError:
+            return Slate(
+                sport=sport, date=day, generated_at=now, picks=[], status="pending",
+                message="Live data is still loading from upstream sources. Try again shortly.",
+            )
         except Exception as exc:  # network / quota / parse failures degrade gracefully
-            print(f"[LiveProvider] get_slate({sport}) failed: {exc!r}")
-            return Slate(sport=sport, date=day, generated_at=f"{day}T00:00:00", picks=[])
+            log.exception("get_slate(%s) failed: %r", sport, exc)
+            return Slate(
+                sport=sport, date=day, generated_at=now, picks=[], status="unavailable",
+                message="Live data is temporarily unavailable.",
+            )
 
         results = payload["results"]
         game_times = payload["game_times"]
@@ -459,8 +546,8 @@ class LiveProvider(DataProvider):
         game_date = self._parse_date(None)
         try:
             payload = self._fetch(sport, game_date)
-        except Exception as exc:
-            print(f"[LiveProvider] get_player({name}, {sport}) failed: {exc!r}")
+        except Exception as exc:  # incl. TimeoutError past the deadline
+            log.warning("get_player(%s, %s) failed: %r", name, sport, exc)
             return None
 
         summaries = payload["summaries"]
